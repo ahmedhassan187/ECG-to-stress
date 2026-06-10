@@ -9,12 +9,13 @@ import pickle
 
 
 class Pipeline:
-    def __init__(self, label, big_chunck_size, small_chunck_size):
+    def __init__(self, label, big_chunck_size, small_chunck_size, chunk_method="random"):
         self.label = label
         self.big_chunck_size = big_chunck_size
         self.small_chunck_size = small_chunck_size
+        self.chunk_method = chunk_method  # Default chunk method
+# Reading WESAD dataset
     def read_wesad(self,folder_path):
-        
         ecg_list = []
         label_list = []
 
@@ -58,6 +59,7 @@ class Pipeline:
             filtered.append(ecg[mask])
 
         return filtered
+# Cut data into chunks
     def random_chunk(self, ecg_subjetcs, fs=700, time_in_sec=30):
         """
         Returns a random chunk of the ECG signal of specified duration
@@ -90,6 +92,21 @@ class Pipeline:
             all_chunks.append(chunks)
     
         return all_chunks
+    def get_first_chunck(self,ecg_subjetcs, fs=700, time_in_sec=30):
+        """
+        Returns the first chunk of the ECG signal of specified duration
+        """
+        ecg_small_subjects = []
+        chunk_size = fs * time_in_sec
+        # print(f"Chunk size in samples: {chunk_size}")
+        for ecg_big_chuncks in ecg_subjetcs:
+            small_chunks = []
+            for ecg in ecg_big_chuncks:
+                # print(f"Processing ECG of length: {len(ecg)} samples")
+                small_chunks.append(ecg[:chunk_size])
+            ecg_small_subjects.append(small_chunks)  
+        return ecg_small_subjects
+# Parameters and then statistics
     def get_hrv_parameters(self, ecg_chunks_list, fs=700):
         
         rmssd_all = []
@@ -172,6 +189,7 @@ class Pipeline:
             icc_list.append(icc)
 
         return r_list, mae_list, icc_list
+# results
     def show_results(self, r_list, mae_list, icc_list, feature_name):
         print(f"Results for {feature_name}:")
         for i, (r, mae, icc) in enumerate(zip(r_list, mae_list, icc_list)):
@@ -188,8 +206,12 @@ class Pipeline:
         ecg_big_chuncks = self.chunk_ecg(ecg_big_chuncks, time_in_sec=self.big_chunck_size)
 
         # 4. Get random small chuncks from big chuncks
-        ecg_small_chuncks = self.random_chunk(ecg_big_chuncks, time_in_sec=self.small_chunck_size)
-
+        if self.chunk_method == "random":
+            ecg_small_chuncks = self.random_chunk(ecg_big_chuncks, time_in_sec=self.small_chunck_size)
+        elif self.chunk_method == "first":
+            ecg_small_chuncks = self.get_first_chunck(ecg_big_chuncks, time_in_sec=self.small_chunck_size)
+        else:
+            raise ValueError("Invalid chunk method. Use 'random' or 'first'.")
         # 5. Get HRV parameters for big and small chuncks
         rmssd_big, sdnn_big = self.get_hrv_parameters(ecg_big_chuncks)
         rmssd_small, sdnn_small = self.get_hrv_parameters(ecg_small_chuncks)
