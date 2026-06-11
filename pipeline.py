@@ -6,6 +6,7 @@ from sklearn.metrics import mean_absolute_error
 import pingouin as pg
 import os
 import pickle
+import warnings
 
 
 class Pipeline:
@@ -69,9 +70,9 @@ class Pipeline:
         for ecg_big_chuncks in ecg_subjetcs:
             random_chunks = []
             for ecg in ecg_big_chuncks:
-                random_int = np.random.randint(0, (len(ecg)-chunk_size))
                 if len(ecg) < chunk_size:
                     raise ValueError("ECG signal is shorter than the requested chunk size.")
+                random_int = np.random.randint(0, len(ecg) - chunk_size + 1)
                 random_chunks.append(ecg[random_int:random_int + chunk_size])
             ecg_random_subjects.append(random_chunks)      
         return ecg_random_subjects
@@ -120,22 +121,24 @@ class Pipeline:
             for chunk in subject_chunks:
             
                 try:
-                    cleaned = nk.ecg_clean(chunk, sampling_rate=fs)
-    
-                    _, peaks = nk.ecg_peaks(cleaned, sampling_rate=fs)
-    
-                    rpeaks = peaks["ECG_R_Peaks"]
-    
-                    if len(rpeaks) < 3:
-                        continue
-                    
-                    rr = np.diff(rpeaks) / fs * 1000
-    
-                    sdnn = np.std(rr, ddof=1)
-                    rmssd = np.sqrt(np.mean(np.diff(rr)**2))
-    
-                    rmssd_sub.append(rmssd)
-                    sdnn_sub.append(sdnn)
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings('ignore')
+                        cleaned = nk.ecg_clean(chunk, sampling_rate=fs)
+        
+                        _, peaks = nk.ecg_peaks(cleaned, sampling_rate=fs)
+        
+                        rpeaks = peaks["ECG_R_Peaks"]
+        
+                        if len(rpeaks) < 3:
+                            continue
+                        
+                        rr = np.diff(rpeaks) / fs * 1000
+        
+                        sdnn = np.std(rr, ddof=1)
+                        rmssd = np.sqrt(np.mean(np.diff(rr)**2))
+        
+                        rmssd_sub.append(rmssd)
+                        sdnn_sub.append(sdnn)
     
                 except:
                     continue
@@ -169,6 +172,13 @@ class Pipeline:
             feature1 = feature1[:min_len]
             feature2 = feature2[:min_len]
 
+            # Skip empty or singleton arrays (Pearson R and ICC require at least 2 samples)
+            if min_len < 2:
+                r_list.append(np.nan)
+                mae_list.append(np.nan)
+                icc_list.append(np.nan)
+                continue
+
             # Calculate Pearson R and MAE
             r, _ = pearsonr(feature1, feature2)
             mae = mean_absolute_error(feature1, feature2)
@@ -180,8 +190,11 @@ class Pipeline:
                 'rating': np.concatenate([feature1, feature2])
             })
 
-            # Compute ICC
-            icc_table = pg.intraclass_corr(data=data, targets='target', raters='rater', ratings='rating')
+            # Compute ICC (suppress pingouin's divide-by-zero RuntimeWarning
+            # which fires when a chunk has near-zero variance)
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=RuntimeWarning)
+                icc_table = pg.intraclass_corr(data=data, targets='target', raters='rater', ratings='rating')
             icc = icc_table.loc[2, 'ICC']
 
             r_list.append(r)
@@ -190,11 +203,68 @@ class Pipeline:
 
         return r_list, mae_list, icc_list
 # results
-    def show_results(self, r_list, mae_list, icc_list, feature_name):
-        print(f"Results for {feature_name}:")
+    def show_results(self, r_list, mae_list, icc_list, feature_name, chunk_label=""):
+        label = f" {chunk_label}" if chunk_label else ""
+        print(f"Results for {feature_name}{label}:")
         for i, (r, mae, icc) in enumerate(zip(r_list, mae_list, icc_list)):
             print(f"Subject {i+1}: R={r:.4f}, MAE={mae:.4f}, ICC={icc:.4f}")
         return
+    def show_results_table(self, r_list, mae_list, icc_list, feature_name, chunk_label):
+        """
+        Plot a color-coded table of results.
+        - High R and ICC values: green
+        - Medium R and ICC values: yellow  
+        - Low R and ICC values: red
+        - For MAE: low values (good) are green, medium are yellow, high are red
+        """
+        # Create DataFrame
+        df = pd.DataFrame({
+            'Subject': [f'Subject {i+1}' for i in range(len(r_list))],
+            'R': r_list,
+            'MAE': mae_list,
+            'ICC': icc_list
+        })
+        df = df.set_index('Subject')
+
+        # Define color mapping functions with better contrast
+        def color_r_icc(val):
+            """Color for R and ICC values (higher is better)"""
+            if val >= 0.8:
+                return 'background-color: #2d7a3e; color: white; font-weight: bold'  # Dark green with white text
+            elif val >= 0.5:
+                return 'background-color: #f4a460; color: black; font-weight: bold'  # Dark orange with black text
+            else:
+                return 'background-color: #c41e3a; color: white; font-weight: bold'  # Dark red with white text
+
+        def color_mae(val):
+            """Color for MAE values (lower is better)"""
+            if val <= 5:
+                return 'background-color: #2d7a3e; color: white; font-weight: bold'  # Dark green with white text
+            elif val <= 15:
+                return 'background-color: #f4a460; color: black; font-weight: bold'  # Dark orange with black text
+            else:
+                return 'background-color: #c41e3a; color: white; font-weight: bold'  # Dark red with white text
+
+        # Build a title that identifies the feature (RMSSD/SDNN) and chunk type (Random/First)
+        title = f"Results for {feature_name} ({chunk_label})"
+
+        # Apply styling and add the title as a caption so it shows on the table itself
+        styled_df = df.style.map(lambda x: color_r_icc(x), subset=['R', 'ICC']) \
+                            .map(lambda x: color_mae(x), subset=['MAE']) \
+                            .format({'R': '{:.4f}', 'MAE': '{:.4f}', 'ICC': '{:.4f}'}) \
+                            .set_caption(title) \
+                            .set_table_styles([{
+                                'selector': 'caption',
+                                'props': [('font-size', '16px'),
+                                          ('font-weight', 'bold'),
+                                          ('text-align', 'left'),
+                                          ('padding-bottom', '8px')]
+                            }])
+
+        # Display the styled table only (no duplicate text version)
+        display(styled_df)
+        return None
+
     def run_pipeline(self, folder_path):
         # 1. Read data
         ecgs_list, labels_list = self.read_wesad(folder_path)
@@ -219,7 +289,9 @@ class Pipeline:
         # 6. Get statistics for RMSSD and SDNN
         r_rmssd, mae_rmssd, icc_rmssd = self.get_statistics(rmssd_big, rmssd_small)
         r_sdnn, mae_sdnn, icc_sdnn = self.get_statistics(sdnn_big, sdnn_small)
+        self.show_results_table(r_rmssd, mae_rmssd, icc_rmssd, "RMSSD", f"{self.chunk_method} chunks")
 
+        self.show_results_table(r_sdnn, mae_sdnn, icc_sdnn, "SDNN", f"{self.chunk_method} chunks")
         # self.show_results([r_rmssd], [mae_rmssd], [icc_rmssd], "RMSSD")
         # self.show_results([r_sdnn], [mae_sdnn], [icc_sdnn], "SDNN")
 
