@@ -7,6 +7,7 @@ import pingouin as pg
 import os
 import pickle
 import warnings
+from IPython.display import display
 
 
 class Pipeline:
