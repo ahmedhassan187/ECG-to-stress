@@ -98,3 +98,57 @@ class Data:
         ]
         
         return chunks
+    
+    def get_majority_label_chunks(self, ecg, label, time_in_sec=30, threshold=0.9):
+        """
+        Split the full ECG into chunks and assign a label to each chunk
+        based on majority vote. Chunks where no single label reaches
+        'threshold' proportion are discarded.
+        
+        Parameters:
+        - ecg: 1D array of ECG signal
+        - label: 1D array of label values (same length as ecg)
+        - time_in_sec: chunk duration in seconds (default: 30)
+        - threshold: minimum fraction needed to keep a chunk (default: 0.9)
+        
+        Returns:
+        - keep_ecg: list of ECG chunks that passed the threshold
+        - keep_labels: list of majority-label values for kept chunks
+        - discarded: dict with info about discarded chunks
+            {'count': int, 'labels': list, 'purities': list}
+        """
+        chunk_size = self.fs * time_in_sec
+        n_total = len(ecg)
+        n_chunks = n_total // chunk_size
+        
+        keep_ecg = []
+        keep_labels = []
+        discarded_labels = []
+        discarded_purities = []
+        
+        for i in range(n_chunks):
+            start = i * chunk_size
+            end = start + chunk_size
+            lbl_chunk = label[start:end]
+            
+            # Count label proportions
+            unique, counts = np.unique(lbl_chunk, return_counts=True)
+            fractions = counts / chunk_size
+            max_idx = np.argmax(fractions)
+            max_label = unique[max_idx]
+            max_frac = fractions[max_idx]
+            
+            if max_frac >= threshold:
+                keep_ecg.append(ecg[start:end])
+                keep_labels.append(max_label)
+            else:
+                discarded_labels.append(max_label)
+                discarded_purities.append(max_frac)
+        
+        discarded = {
+            'count': len(discarded_labels),
+            'labels': discarded_labels,
+            'purities': discarded_purities
+        }
+        
+        return keep_ecg, keep_labels, discarded
