@@ -20,6 +20,138 @@ class Visualization:
         plt.style.use(style)
         sns.set_palette("husl")
     
+    def plot_ecg_rolling(self, ecg, fs=700, chunk_size=5000, overlap=0,
+                         start_chunk=0, max_chunks=None, title="ECG Signal",
+                         color='#1f77b4', figsize=(15, 4), show_labels=True,
+                         label=None, label_colors=None, label_names=None,
+                         linewidth=0.8):
+        """
+        Loop through an ECG signal and plot it chunk by chunk, with optional
+        label-based coloring within each chunk.
+        
+        When `label` is provided, the signal within each chunk is plotted as
+        coloured segments matching each label value, so transitions between
+        conditions are visible inside a single plot.
+        
+        Parameters:
+        - ecg: 1D array of ECG signal values
+        - fs: sampling frequency in Hz (default: 700)
+        - chunk_size: number of points per chunk (e.g., 4000 or 5000)
+        - overlap: number of overlapping points between consecutive chunks (default: 0)
+        - start_chunk: index of the first chunk to display (default: 0)
+        - max_chunks: maximum number of chunks to plot (default: None = all)
+        - title: plot title
+        - color: line color used when label is not provided (default: '#1f77b4')
+        - figsize: figure size (width, height)
+        - show_labels: if True, show x-axis label, grid, and title (default: True)
+        - label: 1D array of label values aligned with ecg (same length).
+                 If provided, the signal is coloured segment-by-segment so that
+                 each label value gets its own colour. A legend of the conditions
+                 present in the chunk is added.
+        - label_colors: dict mapping label value -> colour string. Default:
+                        {1: 'green', 2: 'red', 3: 'blue', 4: 'orange'}
+        - label_names: dict mapping label value -> name string. Used in legend.
+                       Default: {1: 'Baseline', 2: 'Stress', 3: 'Amusement', 4: 'Meditation'}
+        - linewidth: width of the plotted line (default: 0.8)
+        
+        Returns:
+        - figs: list of matplotlib figure objects, one per chunk
+        """
+        fs = int(fs)
+        chunk_size = int(chunk_size)
+        overlap = int(overlap)
+        step = chunk_size - overlap
+        
+        if step <= 0:
+            raise ValueError("step (chunk_size - overlap) must be > 0")
+        
+        # Default label colors and names (WESAD convention)
+        if label_colors is None:
+            label_colors = {1: 'green', 2: 'red', 3: 'blue', 4: 'orange'}
+        if label_names is None:
+            label_names = {1: 'Baseline', 2: 'Stress', 3: 'Amusement', 4: 'Meditation'}
+        
+        total_samples = len(ecg)
+        figs = []
+        
+        # Calculate number of chunks
+        n_chunks = max(0, (total_samples - overlap) // step)
+        if n_chunks == 0:
+            n_chunks = 1  # at least one chunk for short signals
+        
+        end_idx = start_chunk + max_chunks if max_chunks is not None else n_chunks
+        end_idx = min(end_idx, n_chunks)
+        
+        for i in range(start_chunk, end_idx):
+            start = i * step
+            end = min(start + chunk_size, total_samples)
+            
+            if start >= total_samples:
+                break
+            
+            chunk = ecg[start:end]
+            t = np.arange(len(chunk)) / fs  # time in seconds
+            
+            fig, ax = plt.subplots(figsize=figsize)
+            
+            if label is not None:
+                chunk_labels = label[start:end]
+                
+                # Find contiguous segments with the same label
+                # diff gives 0 where label does NOT change, non-zero where it does
+                change_points = np.where(np.diff(chunk_labels, prepend=chunk_labels[0]))[0]
+                # Add end of chunk as the final boundary
+                boundaries = np.concatenate([change_points, [len(chunk)]])
+                
+                legend_handles = {}  # label_value -> (handle, name)
+                prev = 0
+                for b in boundaries:
+                    seg_label = chunk_labels[prev]
+                    seg_color = label_colors.get(seg_label, color)
+                    seg_name = label_names.get(seg_label, f'Label {seg_label}')
+                    
+                    line, = ax.plot(t[prev:b], chunk[prev:b],
+                                    color=seg_color, linewidth=linewidth)
+                    
+                    # Only keep first handle per label for legend
+                    if seg_label not in legend_handles:
+                        legend_handles[seg_label] = (line, seg_name)
+                    
+                    prev = b
+                
+                # Add legend for conditions present in this chunk
+                if legend_handles:
+                    handles = [h for h, _ in legend_handles.values()]
+                    names = [n for _, n in legend_handles.values()]
+                    ax.legend(handles, names, fontsize=9, loc='upper right')
+                
+                # Title: show the dominant label
+                unique_labels, counts = np.unique(chunk_labels, return_counts=True)
+                dominant_label = unique_labels[np.argmax(counts)]
+                label_name = label_names.get(dominant_label, f'Label {dominant_label}')
+                chunk_info = f"Chunk {i+1}/{n_chunks} | {label_name}"
+            else:
+                ax.plot(t, chunk, color=color, linewidth=linewidth)
+                chunk_info = f"Chunk {i+1}/{n_chunks}"
+            
+            if show_labels:
+                ax.set_title(f"{title} | {chunk_info} "
+                            f"(samples {start}-{end})",
+                            fontsize=12, fontweight='bold')
+                ax.set_xlabel("Time (s)", fontsize=11)
+                ax.set_ylabel("Amplitude", fontsize=11)
+                ax.grid(alpha=0.3)
+            else:
+                ax.set_title(f"Chunk {i+1}/{n_chunks}")
+            
+            plt.tight_layout()
+            figs.append(fig)
+        
+        if len(figs) == 0:
+            print("No chunks to display.")
+        
+        return figs
+    
     def plot_features_dist(self, df, feature_cols=None, figsize=(16, 7)):
         """
         Plot feature distributions by class (stress vs non-stress).
