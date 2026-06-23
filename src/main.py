@@ -22,11 +22,22 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# Add src directory to path for imports
+src_dir = Path(__file__).parent
+sys.path.insert(0, str(src_dir))
+
 # Import classes from src
-from data import Data
-from features import Features
-from visualization import Visualization
-from correlation import Correlation
+try:
+    from data import Data
+    from features import Features
+    from visualization import Visualization
+    from correlation import Correlation
+except ImportError as e:
+    print(f"❌ Error importing modules: {e}")
+    print(f"   Make sure you're running from the project root:")
+    print(f"   cd g:\\Master\\Thesis\\FLT\\Code\\ECG-to-stress")
+    print(f"   python src/main.py --help")
+    sys.exit(1)
 
 warnings.filterwarnings('ignore')
 
@@ -39,134 +50,110 @@ def parse_arguments():
         Namespace: parsed arguments
     """
     parser = argparse.ArgumentParser(
-        prog='python main.py',
+        prog='python src/main.py',
         description='ECG-to-Stress Analysis Tool - WESAD Dataset Processing',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
   # Correlation Analysis
-  python main.py -c                              # All features
-  python main.py --corr -f mean_rr mean_hr       # Specific features
+  python src/main.py -c                              # All features
+  python src/main.py --corr -f mean_rr mean_hr       # Specific features
   
   # Full Signal Visualization
-  python main.py -f                              # Default 5000 points per chunk
-  python main.py --full -p 10000                 # 10000 points per chunk
+  python src/main.py -f                              # Default 5000 points per chunk
+  python src/main.py --full -p 10000                 # 10000 points per chunk
   
   # Machine Learning Models
-  python main.py -m                              # All models, all datasets
-  python main.py -m -d 30 120 300                # Specific datasets (30s, 120s, 300s)
-  python main.py -m -mo knn svm xgboost          # Specific models
-  python main.py -m -d 30 -mo random_forest      # Specific dataset + models
+  python src/main.py -m                              # All models, all datasets
+  python src/main.py -m -d 30 120 300                # Specific datasets (30s, 120s, 300s)
+  python src/main.py -m -mo knn svm xgboost          # Specific models
+  python src/main.py -m -d 30 -mo random_forest      # Specific dataset + models
         """
     )
     
-    # Define subcommands using add_subparsers
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    # Create mutually exclusive group for commands
+    commands = parser.add_mutually_exclusive_group()
     
     # ========== CORRELATION COMMAND ==========
-    corr_parser = subparsers.add_parser(
-        'correlation',
-        aliases=['-c', '--corr'],
+    commands.add_argument(
+        '-c', '--corr',
+        action='store_true',
+        dest='correlation',
         help='Generate correlation analysis of HRV features'
     )
-    corr_parser.add_argument(
-        '-f', '--features',
+    
+    # ========== FULL SIGNAL COMMAND ==========
+    commands.add_argument(
+        '-f', '--full',
+        action='store_true',
+        dest='full_signal',
+        help='Plot full ECG signals with adjustable chunk size'
+    )
+    
+    # ========== ML MODELS COMMAND ==========
+    commands.add_argument(
+        '-m', '--ml',
+        action='store_true',
+        dest='ml_training',
+        help='Train machine learning models with cross-validation'
+    )
+    
+    # ========== CORRELATION OPTIONS ==========
+    corr_group = parser.add_argument_group('Correlation Analysis Options')
+    corr_group.add_argument(
+        '--features',
         nargs='+',
         type=str,
         default=['all'],
-        help="""Features to analyze (default: all).
-Available features: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio"""
+        help='Features to analyze (default: all). Available: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio'
     )
-    corr_parser.add_argument(
+    
+    # ========== SHARED OPTIONS ==========
+    shared_group = parser.add_argument_group('Common Options')
+    shared_group.add_argument(
         '-d', '--dataset',
         nargs='+',
         type=int,
         default=[30, 120, 300],
         help='Dataset durations in seconds (default: 30 120 300)'
     )
-    corr_parser.add_argument(
+    shared_group.add_argument(
         '-o', '--output',
         type=str,
-        default='../results/correlation_figures',
-        help='Output directory for correlation figures (default: ../results/correlation_figures)'
+        default=None,
+        help='Output directory (default: results/{correlation_figures|signal_plots|ml_results})'
     )
     
-    # ========== FULL SIGNAL COMMAND ==========
-    full_parser = subparsers.add_parser(
-        'full',
-        aliases=['-f', '--full'],
-        help='Plot full ECG signals with adjustable chunk size'
-    )
-    full_parser.add_argument(
+    # ========== VISUALIZATION OPTIONS ==========
+    viz_group = parser.add_argument_group('Full Signal Visualization Options')
+    viz_group.add_argument(
         '-p', '--points',
         type=int,
         default=5000,
         help='Number of points per plot chunk (default: 5000)'
     )
-    full_parser.add_argument(
+    viz_group.add_argument(
         '-s', '--subjects',
         nargs='+',
         type=int,
         default=None,
         help='Specific subject IDs to plot (default: all subjects)'
     )
-    full_parser.add_argument(
-        '-o', '--output',
-        type=str,
-        default='../results/signal_plots',
-        help='Output directory for signal plots (default: ../results/signal_plots)'
-    )
     
-    # ========== ML MODELS COMMAND ==========
-    ml_parser = subparsers.add_parser(
-        'ml',
-        aliases=['-m', '--ml'],
-        help='Train machine learning models with cross-validation'
-    )
-    ml_parser.add_argument(
-        '-d', '--dataset',
-        nargs='+',
-        type=int,
-        default=[30, 120, 300],
-        help='Dataset durations in seconds (default: 30 120 300)'
-    )
-    ml_parser.add_argument(
+    # ========== ML OPTIONS ==========
+    ml_group = parser.add_argument_group('Machine Learning Options')
+    ml_group.add_argument(
         '-mo', '--models',
         nargs='+',
         type=str,
         default=['knn', 'svm', 'decision_tree', 'random_forest', 'gradient_boosting', 'logistic_regression', 'xgboost'],
-        help="""Models to train (default: all).
-Available: knn, svm, decision_tree, random_forest, gradient_boosting, logistic_regression, xgboost"""
+        help='Models to train. Available: knn, svm, decision_tree, random_forest, gradient_boosting, logistic_regression, xgboost'
     )
-    ml_parser.add_argument(
+    ml_group.add_argument(
         '-cv', '--cross-val',
         type=int,
         default=5,
         help='Number of cross-validation folds (default: 5)'
-    )
-    ml_parser.add_argument(
-        '-o', '--output',
-        type=str,
-        default='../results/ml_results',
-        help='Output directory for ML results (default: ../results/ml_results)'
-    )
-    
-    # Handle old-style arguments (backward compatibility)
-    # These allow: python main.py -c, python main.py -f, python main.py -m
-    parser.add_argument(
-        '-c', '--corr',
-        action='store_true',
-        help='Run correlation analysis (all features by default)'
-    )
-    parser.add_argument(
-        '-f', '--full',
-        action='store_true',
-        help='Plot full ECG signals'
-    )
-    parser.add_argument(
-        '-m', '--ml',
-        action='store_true',
-        help='Train machine learning models'
     )
     
     return parser
@@ -182,6 +169,9 @@ def run_correlation_analysis(args):
     print("\n" + "="*80)
     print("CORRELATION ANALYSIS")
     print("="*80)
+    
+    # Set default output directory if not specified
+    output_dir = args.output or '../results/correlation_figures'
     
     # Initialize components
     data_loader = Data(fs=700)
@@ -203,9 +193,9 @@ def run_correlation_analysis(args):
         return
     
     # Create output directory
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"📁 Output directory: {output_dir}")
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory: {output_path}")
     
     # Process each dataset duration
     for duration in args.dataset:
@@ -271,7 +261,7 @@ def run_correlation_analysis(args):
         # TODO: Implement correlation visualization methods from Visualization class
         
         # Save results
-        csv_path = output_dir / f"features_{duration}s.csv"
+        csv_path = output_path / f"features_{duration}s.csv"
         df.to_csv(csv_path, index=False)
         print(f"✓ Saved: {csv_path}")
     
@@ -288,6 +278,9 @@ def run_full_signal_visualization(args):
     print("\n" + "="*80)
     print("FULL ECG SIGNAL VISUALIZATION")
     print("="*80)
+    
+    # Set default output directory if not specified
+    output_dir = args.output or '../results/signal_plots'
     
     # Initialize components
     data_loader = Data(fs=700)
@@ -308,9 +301,9 @@ def run_full_signal_visualization(args):
         return
     
     # Create output directory
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"📁 Output directory: {output_dir}")
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory: {output_path}")
     
     # Generate plots for each subject
     subjects = args.subjects if args.subjects else range(len(ecgs))
@@ -335,7 +328,7 @@ def run_full_signal_visualization(args):
             )
             
             # Save plot
-            plot_path = output_dir / f"subject_{idx:02d}_ecg.png"
+            plot_path = output_path / f"subject_{idx:02d}_ecg.png"
             import matplotlib.pyplot as plt
             plt.savefig(plot_path, dpi=100, bbox_inches='tight')
             plt.close()
@@ -356,6 +349,9 @@ def run_ml_training(args):
     print("\n" + "="*80)
     print("MACHINE LEARNING MODEL TRAINING")
     print("="*80)
+    
+    # Set default output directory if not specified
+    output_dir = args.output or '../results/ml_results'
     
     # Initialize components
     data_loader = Data(fs=700)
@@ -391,9 +387,9 @@ def run_ml_training(args):
     print(f"🤖 Models to train: {', '.join(models_to_train)}")
     
     # Create output directory
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"📁 Output directory: {output_dir}")
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory: {output_path}")
     
     # Process each dataset duration
     print(f"📊 Cross-validation folds: {args.cross_val}")
@@ -468,20 +464,12 @@ def main():
     # Parse arguments
     args = parser.parse_args()
     
-    # Handle old-style short flags (backward compatibility)
-    if args.corr:
-        args.command = 'correlation'
-    elif args.full:
-        args.command = 'full'
-    elif args.ml:
-        args.command = 'ml'
-    
-    # Execute appropriate command
-    if args.command in ['correlation', '-c', '--corr']:
+    # Execute appropriate command based on flags
+    if args.correlation:
         run_correlation_analysis(args)
-    elif args.command in ['full', '-f', '--full']:
+    elif args.full_signal:
         run_full_signal_visualization(args)
-    elif args.command in ['ml', '-m', '--ml']:
+    elif args.ml_training:
         run_ml_training(args)
     else:
         parser.print_help()
