@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import re
 from sklearn.metrics import confusion_matrix
 from IPython.display import display
 
@@ -439,3 +440,114 @@ class Visualization:
         display(stats_df.round(3))
         
         return stats_df
+    
+    def save_styled_df_as_png(self, styled_df, save_path, figsize=None,
+                              higher_is_better_cols=None, lower_is_better_cols=None):
+        """
+        Save a DataFrame as a PNG image with green/yellow/red coloring based on values.
+        
+        Parameters:
+        - styled_df: a pandas Styler object (or plain DataFrame)
+        - save_path: path where the PNG will be saved (e.g. '../results/my_table.png')
+        - figsize: tuple (width, height) of the figure (default: computed from data rows)
+        - higher_is_better_cols: list of column names where high values = green (r, ICC)
+        - lower_is_better_cols: list of column names where low values = green (MAE)
+        
+        Returns:
+        - fig, ax: matplotlib figure and axes (already saved to save_path)
+        """
+        # Extract underlying DataFrame from Styler if needed
+        if hasattr(styled_df, 'data'):
+            df = styled_df.data.copy()
+        else:
+            df = styled_df.copy()
+        
+        if higher_is_better_cols is None:
+            higher_is_better_cols = []
+        if lower_is_better_cols is None:
+            lower_is_better_cols = []
+        
+        # Auto-detect: if no columns specified, treat all numeric columns as higher_is_better
+        if not higher_is_better_cols and not lower_is_better_cols:
+            higher_is_better_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.number)]
+        
+        if figsize is None:
+            n_rows = len(df)
+            figsize = (10, max(2, n_rows // 2 + 1))
+        
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.axis('off')
+        
+        cols = list(df.columns)
+        
+        # Build cell text with formatting
+        cell_text = []
+        for idx, row in df.iterrows():
+            row_text = []
+            for v in row:
+                if isinstance(v, float):
+                    row_text.append(f'{v:.4f}')
+                else:
+                    row_text.append(str(v))
+            cell_text.append(row_text)
+        
+        table = ax.table(
+            cellText=cell_text,
+            rowLabels=[str(i) for i in df.index],
+            colLabels=cols,
+            cellLoc='center',
+            loc='center'
+        )
+        
+        # Colour each numeric cell based on its value
+        GREEN  = '#2d7a3e'  # >= 0.8 or <= 0.5
+        AMBER  = '#f4a460'  # >= 0.6 or <= 1.0
+        RED    = '#c41e3a'  # < 0.6 or > 1.0
+        
+        for col_idx, col_name in enumerate(cols):
+            if col_name not in higher_is_better_cols and col_name not in lower_is_better_cols:
+                continue  # skip non-metric columns (e.g. feature names)
+            
+            is_higher = col_name in higher_is_better_cols
+            is_lower  = col_name in lower_is_better_cols
+            
+            for row_idx in range(len(df)):
+                val = df.iloc[row_idx, col_idx]
+                if np.isnan(val):
+                    continue
+                
+                if is_higher:
+                    # Higher is better: green >= 0.8, amber >= 0.6, red < 0.6
+                    if val >= 0.8:
+                        bg, fg = GREEN, 'white'
+                    elif val >= 0.6:
+                        bg, fg = AMBER, 'black'
+                    else:
+                        bg, fg = RED, 'white'
+                elif is_lower:
+                    # Lower is better: green <= 0.5, amber <= 1.0, red > 1.0
+                    if val <= 0.5:
+                        bg, fg = GREEN, 'white'
+                    elif val <= 1.0:
+                        bg, fg = AMBER, 'black'
+                    else:
+                        bg, fg = RED, 'white'
+                else:
+                    continue
+                
+                cell = table[row_idx + 1, col_idx]  # +1 because row0 = header
+                cell.set_facecolor(bg)
+                cell.get_text().set_color(fg)
+                cell.get_text().set_weight('bold')
+        
+        # Scale table and layout
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.5)
+        
+        plt.tight_layout()
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved styled table to: {save_path}")
+        plt.close(fig)
+        
+        return fig, ax

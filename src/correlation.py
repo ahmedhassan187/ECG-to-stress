@@ -103,47 +103,115 @@ class Correlation:
         features2 = features2[mask]
         
         # Check if we have enough samples
-        if len(features1) < 3 or len(features2) < 3:
-            return np.nan
+        n = len(features1)
+        if n < 2:
+            return np.nan, (np.nan, np.nan)
         
-        # Create long-format DataFrame for ICC calculation
-        min_len = min(len(features1), len(features2))
-        features1 = features1[:min_len]
-        features2 = features2[:min_len]
+        # If all values are identical (variance=0), ICC = 1
+        if (np.all(features1 == features1[0]) and 
+            np.all(features2 == features2[0]) and 
+            features1[0] == features2[0]):
+            return 1.0, (1.0, 1.0)
         
-        data = pd.DataFrame({
-            'target': list(range(min_len)) * 2,
-            'rater': ['method1'] * min_len + ['method2'] * min_len,
-            'rating': np.concatenate([features1, features2])
-        })
+        try:
+            k = 2  # number of raters / methods
+            # Grand mean of all observations
+            grand_mean = np.mean(np.concatenate([features1, features2]))
+            
+            # Subject (target) means — average across raters
+            target_means = (features1 + features2) / 2
+            
+            # Rater means — average across subjects
+            rater_means = np.array([np.mean(features1), np.mean(features2)])
+            
+            # --- Sums of squares ---
+            # Between subjects (targets)
+            ss_between = k * np.sum((target_means - grand_mean)**2)
+            df_between = n - 1
+            ms_between = ss_between / df_between if df_between > 0 else 0
+            
+            # Between raters
+            ss_rater = n * np.sum((rater_means - grand_mean)**2)
+            df_rater = k - 1
+            ms_rater = ss_rater / df_rater if df_rater > 0 else 0
+            
+            # Residual / error
+            # For each observation: x_{ij} = target_mean_i + rater_mean_j - grand_mean + residual
+            residuals = np.concatenate([
+                features1 - target_means - rater_means[0] + grand_mean,
+                features2 - target_means - rater_means[1] + grand_mean
+            ])
+            ss_error = np.sum(residuals**2)
+            df_error = (n - 1) * (k - 1)
+            ms_error = ss_error / df_error if df_error > 0 else 0
+            
+            # --- ICC formulas (Shrout & Fleiss) ---
+            if icc_type == 'ICC1':
+                # One-way random, single measure
+                # Re-use ms_error but note: ICC1 ignores rater effects,
+                # so ms_within = ss_error/df_error from two-way isn't correct for ICC1.
+                # For ICC1: ss_within = ss_rater + ss_error, df_within = df_rater + df_error
+                ss_within_total = ss_rater + ss_error
+                df_within_total = df_rater + df_error
+                ms_within_total = ss_within_total / df_within_total if df_within_total > 0 else 0
+                if ms_within_total == 0:
+                    return 1.0, (np.nan, np.nan)
+                icc = (ms_between - ms_within_total) / (ms_between + (k - 1) * ms_within_total)
+            elif icc_type == 'ICC2':
+                # Two-way random, single measure, absolute agreement
+                numerator = ms_between - ms_error
+                denominator = ms_between + (k - 1) * ms_error + k * (ms_rater - ms_error) / n
+                if denominator == 0:
+                    return 1.0, (np.nan, np.nan)
+                icc = numerator / denominator
+            elif icc_type == 'ICC3':
+                # Two-way mixed, single measure, consistency
+                numerator = ms_between - ms_error
+                denominator = ms_between + (k - 1) * ms_error
+                if denominator == 0:
+                    return 1.0, (np.nan, np.nan)
+                icc = numerator / denominator
+            elif icc_type == 'ICC2k':
+                # Two-way random, average measure (k raters)
+                numerator = ms_between - ms_error
+                denominator = ms_between + (ms_rater - ms_error) / n
+                if denominator == 0:
+                    return 1.0, (np.nan, np.nan)
+                icc = numerator / denominator
+            elif icc_type == 'ICC3k':
+                # Two-way mixed, average measure (k raters)
+                numerator = ms_between - ms_error
+                denominator = ms_between
+                if denominator == 0:
+                    return 1.0, (np.nan, np.nan)
+                icc = numerator / denominator
+            else:
+                return np.nan, (np.nan, np.nan)
+            
+            icc = max(-1.0, min(1.0, icc))
+            return icc, (np.nan, np.nan)
         
-        # Calculate ICC
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
+        except Exception as e:
+            # Fallback: pingouin
             try:
-                icc_table = pg.intraclass_corr(data=data, 
-                                              targets='target', 
-                                              raters='rater', 
-                                              ratings='rating')
-                
-                # Map ICC type to table index
-                icc_map = {
-                    'ICC1': 0, 'ICC2': 1, 'ICC3': 2,
-                    'ICC1k': 3, 'ICC2k': 4, 'ICC3k': 5
-                }
-                
-                if icc_type in icc_map:
-                    idx = icc_map[icc_type]
-                    icc = icc_table.loc[idx, 'ICC']
-                    conf_int = (icc_table.loc[idx, 'CI2.5%'], icc_table.loc[idx, 'CI97.5%'])
-                else:
-                    # Default to ICC2 (index 1)
-                    icc = icc_table.loc[1, 'ICC']
-                    conf_int = (icc_table.loc[1, 'CI2.5%'], icc_table.loc[1, 'CI97.5%'])
-                
-                return icc, conf_int
-                
-            except Exception as e:
+                data = pd.DataFrame({
+                    'target': list(range(n)) * 2,
+                    'rater': ['method1'] * n + ['method2'] * n,
+                    'rating': np.concatenate([features1, features2])
+                })
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore')
+                    icc_table = pg.intraclass_corr(data=data, targets='target', 
+                                                    raters='rater', ratings='rating')
+                    match = icc_table[icc_table['Type'] == icc_type]
+                    if len(match) == 1:
+                        icc_val = match['ICC'].values[0]
+                        ci_low = match['CI2.5%'].values[0]
+                        ci_high = match['CI97.5%'].values[0]
+                        return icc_val, (ci_low, ci_high)
+                    else:
+                        return icc_table['ICC'].iloc[0], (icc_table['CI2.5%'].iloc[0], icc_table['CI97.5%'].iloc[0])
+            except:
                 return np.nan, (np.nan, np.nan)
     
     def get_icc_batch(self, feature_list1, feature_list2, icc_type='ICC2'):
