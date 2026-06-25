@@ -93,6 +93,11 @@ class Visualization:
             chunk = ecg[start:end]
             t = np.arange(len(chunk)) / fs  # time in seconds
             
+            # Use non-interactive backend to reduce memory
+            import matplotlib
+            if matplotlib.get_backend() != 'Agg':
+                matplotlib.use('Agg', force=True)
+            
             fig, ax = plt.subplots(figsize=figsize)
             
             if label is not None:
