@@ -23,9 +23,13 @@ python src/main.py -c -d 30 120
 
 # Both custom
 python src/main.py -c -f mean_rr -d 30 120 -o ./results
+
+# Custom dataset path
+python src/main.py -i /path/to/WESAD -c
 ```
 
 **Key Options:**
+- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
 - `-f / --features`: Specify which HRV features to analyze (default: all)
 - `-d / --dataset`: Specify dataset durations in seconds (default: 30 120 300)
 - `-o / --output`: Custom output directory
@@ -60,9 +64,13 @@ python src/main.py -f -s 0 1 2
 
 # Custom combination
 python src/main.py -f -p 8000 -s 0 3 5 -o ./my_plots
+
+# Custom dataset path
+python src/main.py -i /path/to/WESAD -f
 ```
 
 **Key Options:**
+- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
 - `-p / --points`: Adjust chunk size (points per plot) (default: 5000)
 - `-s / --subjects`: Specify subject IDs to plot (default: all)
 - `-o / --output`: Custom output directory
@@ -95,9 +103,13 @@ python src/main.py -m -cv 10
 
 # Complete customization
 python src/main.py -m -d 30 -mo knn svm -cv 10 -o ./results
+
+# Custom dataset path
+python src/main.py -i /path/to/WESAD -m
 ```
 
 **Key Options:**
+- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
 - `-d / --dataset`: Dataset durations (30, 120, 300 seconds) (default: all)
 - `-mo / --models`: Specify models to train (default: all)
 - `-cv / --cross-val`: Number of CV folds (default: 5)
@@ -119,13 +131,14 @@ python src/main.py -m -d 30 -mo knn svm -cv 10 -o ./results
 ```
 ECG-to-stress/
 ├── src/
-│   ├── main.py                    ✨ NEW - CLI interface
+│   ├── main.py                    CLI interface
 │   ├── data.py                    (existing classes used)
 │   ├── features.py
 │   ├── visualization.py
 │   └── correlation.py
-├── CLI_README.md                  ✨ NEW - Comprehensive guide
-├── CLI_QUICK_REFERENCE.md         ✨ NEW - Quick lookup
+├── README.md                      Main repository readme
+├── CLI_README.md                  Comprehensive guide
+├── CLI_QUICK_REFERENCE.md         Quick lookup
 └── notebooks/
     └── 05_ml_models.ipynb         (existing)
 ```
@@ -176,16 +189,18 @@ python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
 - `python src/main.py -m --help` - ML training help
 
 ✅ **Flexible Argument Parsing**
-- Short flags (`-c`, `-f`, `-m`)
-- Long flags (`--corr`, `--full`, `--ml`)
+- Short flags (`-c`, `-f`, `-m`, `-i`)
+- Long flags (`--corr`, `--full`, `--ml`, `--input`)
 - Subcommand aliases for flexibility
 
 ✅ **Smart Defaults**
+- Dataset path: `data/WESAD`
 - Correlation: All features, all durations (30, 120, 300s)
 - Visualization: 5000 points per chunk, all subjects
 - ML: All 7 models, all durations, 5-fold CV
 
 ✅ **Custom Configuration**
+- Specify dataset input path
 - Specify exact features, durations, models
 - Adjust visualization parameters
 - Configure output directories
@@ -203,7 +218,7 @@ python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
 
 ### Correlation Analysis Output
 ```
-📂 Loading dataset from: ../data/WESAD
+📂 Loading dataset from: data/WESAD
 ✓ Loaded 15 subjects
 
 30s Dataset:
@@ -216,7 +231,7 @@ python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
 
 ### Full Signal Visualization Output
 ```
-📂 Loading dataset from: ../data/WESAD
+📂 Loading dataset from: data/WESAD
 ✓ Loaded 15 subjects
 📊 Chunk size: 10000 points per plot
 
@@ -246,6 +261,9 @@ python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
 ---
 
 ## 📚 Documentation Files
+
+### `README.md` (Main)
+Project overview and entry point. References all other documentation files.
 
 ### `CLI_README.md`
 Comprehensive usage guide with:
@@ -287,6 +305,7 @@ The CLI is designed to be extensible. You can enhance it further by:
 ✅ **Sensible Defaults**: Works without arguments
 ✅ **Informative Messages**: User knows what's happening
 ✅ **Flexible Paths**: Relative and absolute path support
+✅ **Adjustable Input Path**: Dataset location configurable via `-i`/`--input`
 ✅ **Error Handling**: Validation of inputs with helpful messages
 
 ---
@@ -295,6 +314,7 @@ The CLI is designed to be extensible. You can enhance it further by:
 
 You now have a production-ready CLI that provides:
 - 3 main commands (correlation, visualization, ML)
+- Adjustable dataset input path via `-i`/`--input`
 - 7 different ML models
 - 3 dataset durations
 - 8 HRV features
@@ -302,4 +322,3 @@ You now have a production-ready CLI that provides:
 - Comprehensive documentation
 
 Users can now perform complex analysis with simple, intuitive commands!
-

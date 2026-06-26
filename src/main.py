@@ -5,7 +5,9 @@ and machine learning model training.
 
 Usage Examples:
     py src/main.py --help                           # Show help message
-    py src/main.py -c                               # Run correlation analysis (all features)
+    py src/main.py -i data/WESAD -c                 # Run correlation analysis with custom dataset path
+    py src/main.py --input /path/to/data -c         # Same with long flag
+    py src/main.py -c                               # Run correlation analysis (default dataset path)
     py src/main.py --corr --features feature1 feature2  # Run correlation on specific features
     py src/main.py -f                               # Plot full ECG signals (default 5000 points)
     py src/main.py --full -p 10000                  # Plot with 10000 points per chunk
@@ -78,6 +80,7 @@ EXAMPLES:
   # Correlation Analysis
   py src/main.py -c                              # All features
   py src/main.py --corr --features mean_rr mean_hr  # Specific features
+  py src/main.py -i data/WESAD -c                # Custom dataset path
   
   # Full Signal Visualization
   py src/main.py -f                              # Default 5000 points per chunk
@@ -131,6 +134,12 @@ EXAMPLES:
     # ========== SHARED OPTIONS ==========
     shared_group = parser.add_argument_group('Common Options')
     shared_group.add_argument(
+        '-i', '--input',
+        type=str,
+        default=None,
+        help='Path to the WESAD dataset directory (default: data/WESAD relative to project root)'
+    )
+    shared_group.add_argument(
         '-d', '--dataset',
         nargs='+',
         type=int,
@@ -179,6 +188,27 @@ EXAMPLES:
     return parser
 
 
+def _get_dataset_path(args):
+    """
+    Resolve the dataset path from the -i argument or use the default.
+    
+    Parameters:
+        args: parsed arguments
+    
+    Returns:
+        Path: resolved path to the WESAD dataset directory
+    """
+    if args.input is not None:
+        # If user provided a path, resolve it relative to the project root if relative
+        input_path = Path(args.input)
+        if not input_path.is_absolute():
+            return project_root / input_path
+        return input_path
+    else:
+        # Default path: data/WESAD relative to project root
+        return project_root / "data" / "WESAD"
+
+
 def _get_model(model_name):
     """Create an sklearn model instance by name."""
     models = {
@@ -218,7 +248,7 @@ def run_correlation_analysis(args):
     viz = Visualization()
     
     # Get dataset path
-    dataset_path = Path(__file__).parent.parent / "data" / "WESAD"
+    dataset_path = _get_dataset_path(args)
     
     print(f"📂 Loading dataset from: {dataset_path}")
     
@@ -356,7 +386,7 @@ def run_full_signal_visualization(args):
     viz = Visualization()
     
     # Get dataset path
-    dataset_path = Path(__file__).parent.parent / "data" / "WESAD"
+    dataset_path = _get_dataset_path(args)
     
     print(f"📂 Loading dataset from: {dataset_path}")
     print(f"📊 Chunk size: {args.points} points per plot")
@@ -452,7 +482,7 @@ def run_ml_training(args):
     ml_evaluator = ML(random_state=42)
     
     # Get dataset path
-    dataset_path = Path(__file__).parent.parent / "data" / "WESAD"
+    dataset_path = _get_dataset_path(args)
     
     print(f"📂 Loading dataset from: {dataset_path}")
     

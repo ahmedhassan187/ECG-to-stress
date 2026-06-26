@@ -9,6 +9,9 @@ python src/main.py
 │  └─ Shows comprehensive help for all commands
 │
 ├─ CORRELATION (-c / --corr)
+│  ├─ -i / --input [path]
+│  │  └─ Default: data/WESAD
+│  │
 │  ├─ -f / --features [feature1 feature2 ...]
 │  │  └─ Options: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio
 │  │  └─ Default: all
@@ -20,6 +23,9 @@ python src/main.py
 │     └─ Default: ../results/correlation_figures
 │
 ├─ FULL SIGNAL (-f / --full)
+│  ├─ -i / --input [path]
+│  │  └─ Default: data/WESAD
+│  │
 │  ├─ -p / --points [int]
 │  │  └─ Range: 2000-15000
 │  │  └─ Default: 5000
@@ -31,6 +37,9 @@ python src/main.py
 │     └─ Default: ../results/signal_plots
 │
 └─ MACHINE LEARNING (-m / --ml)
+   ├─ -i / --input [path]
+   │  └─ Default: data/WESAD
+   │
    ├─ -d / --dataset [30 120 300]
    │  └─ Default: 30 120 300 (all)
    │
@@ -56,10 +65,13 @@ python src/main.py
 | Help | `python src/main.py --help` |
 | Correlations (all) | `python src/main.py -c` |
 | Correlations (specific) | `python src/main.py -c -f mean_rr mean_hr -d 30` |
+| Correlations (custom path) | `python src/main.py -i /path/to/data -c` |
 | Visualizations (default) | `python src/main.py -f` |
 | Visualizations (custom) | `python src/main.py -f -p 8000 -s 0 1 2` |
+| Visualizations (custom path) | `python src/main.py -i /path/to/data -f` |
 | ML (all) | `python src/main.py -m` |
 | ML (custom) | `python src/main.py -m -d 30 -mo knn svm xgboost` |
+| ML (custom path) | `python src/main.py -i /path/to/data -m` |
 
 ---
 
@@ -163,6 +175,7 @@ python src/main.py -m -d 30 -mo random_forest
 python src/main.py -c -f mean_rr sdnn -d 30 120 -o ./my_results
 python src/main.py -f -p 8000 -s 0 1 2 -o ./signals
 python src/main.py -m -d 30 -mo knn svm -cv 10 -o ./ml
+python src/main.py -i /path/to/WESAD -c -f mean_rr -d 30
 ```
 **Result:** Fully customized behavior with custom output paths
 
@@ -281,5 +294,3 @@ python src/main.py -m -d 30 > ml_training.log 2>&1
 
 # Run multiple analyses sequentially
 python src/main.py -c && python src/main.py -f && python src/main.py -m
-```
-

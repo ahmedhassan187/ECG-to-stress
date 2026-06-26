@@ -40,6 +40,7 @@ python src/main.py -m
 
 | File | Purpose | Best For |
 |------|---------|----------|
+| **README.md** | Main repository readme | Getting started |
 | **CLI_README.md** | Comprehensive guide | Detailed learning |
 | **CLI_QUICK_REFERENCE.md** | Quick lookup | Fast command lookup |
 | **CLI_COMMAND_STRUCTURE.md** | Visual diagrams | Understanding flow |
@@ -56,6 +57,7 @@ python src/main.py -m
 python src/main.py -c                              # All features
 python src/main.py -c -f mean_rr mean_hr sdnn      # Specific features
 python src/main.py -c -d 30 120                    # Specific durations
+python src/main.py -i /path/to/WESAD -c            # Custom dataset path
 ```
 
 📊 **Output:** CSV files with correlation data + visualization plots
@@ -69,6 +71,7 @@ python src/main.py -c -d 30 120                    # Specific durations
 python src/main.py -f                              # Default 5000 points
 python src/main.py -f -p 10000                     # Larger chunks
 python src/main.py -f -s 0 1 2                     # Specific subjects
+python src/main.py -i /path/to/WESAD -f            # Custom dataset path
 ```
 
 📈 **Output:** PNG files showing ECG waveforms with color-coded labels
@@ -82,6 +85,7 @@ python src/main.py -f -s 0 1 2                     # Specific subjects
 python src/main.py -m                              # All models, all durations
 python src/main.py -m -d 30                        # Specific duration
 python src/main.py -m -mo knn svm random_forest    # Specific models
+python src/main.py -i /path/to/WESAD -m            # Custom dataset path
 ```
 
 🤖 **Output:** CSV results + comparison plots + performance metrics
@@ -134,6 +138,9 @@ python src/main.py -c -f mean_rr sdnn rmssd -d 30 120
 # Get help
 python src/main.py --help
 python src/main.py -c --help
+
+# Dataset path (optional, defaults to data/WESAD)
+python src/main.py -i /path/to/WESAD -c
 
 # Correlation (3 variants)
 python src/main.py -c
@@ -205,10 +212,11 @@ Export Results & Plots
 
 | Feature | Description |
 |---------|-------------|
+| **Adjustable Input** | Dataset path via `-i`/`--input`, defaults to `data/WESAD` |
 | **8 HRV Features** | Mean RR, Mean HR, SDNN, RMSSD, PNN50, LF Power, HF Power, LF/HF Ratio |
 | **3 Durations** | 30s, 120s, 300s chunks |
 | **7 ML Models** | KNN, SVM, Decision Tree, Random Forest, Gradient Boosting, Logistic Regression, XGBoost |
-| **Multiple Controls** | Feature selection, duration selection, model selection, CV folds, custom outputs |
+| **Multiple Controls** | Input path, feature selection, duration selection, model selection, CV folds, custom outputs |
 | **Smart Defaults** | Works out-of-the-box with no arguments |
 
 ---
@@ -217,6 +225,12 @@ Export Results & Plots
 
 **Q: Do I need to modify any files to use the CLI?**
 A: No! The CLI is self-contained in `src/main.py` and ready to use.
+
+**Q: What if my dataset is in a different location?**
+A: Use the `-i` flag to specify a custom path:
+```bash
+python src/main.py -i /path/to/your/WESAD -m
+```
 
 **Q: What if I get "Module not found" errors?**
 A: Make sure you're in the project root directory:
@@ -252,10 +266,11 @@ results/
 
 If you're new to the CLI, read these files in order:
 
-1. **This file** (CLI_OVERVIEW.md) ← You are here
-2. **CLI_QUICK_REFERENCE.md** (2 min read)
-3. **CLI_COMMAND_STRUCTURE.md** (5 min read)
-4. **CLI_README.md** (15 min read)
+1. **README.md** (Main repo readme - start here)
+2. **This file** (CLI_OVERVIEW.md) ← You are here
+3. **CLI_QUICK_REFERENCE.md** (2 min read)
+4. **CLI_COMMAND_STRUCTURE.md** (5 min read)
+5. **CLI_README.md** (15 min read)
 
 ---
 
@@ -372,7 +387,6 @@ python src/main.py -c
 
 ---
 
-**Last Updated:** 2026-06-23
-**Version:** 1.0
+**Last Updated:** 2026-06-27
+**Version:** 1.1
 **Status:** Production Ready ✅
-

@@ -6,10 +6,11 @@ The `main.py` script provides a command-line interface (CLI) for ECG signal anal
 
 ## Table of Contents
 1. [General Usage](#general-usage)
-2. [Correlation Analysis Command](#correlation-analysis)
-3. [Full Signal Visualization Command](#full-signal-visualization)
-4. [Machine Learning Training Command](#machine-learning-training)
-5. [Examples](#examples)
+2. [Dataset Path Configuration](#dataset-path-configuration)
+3. [Correlation Analysis Command](#correlation-analysis)
+4. [Full Signal Visualization Command](#full-signal-visualization)
+5. [Machine Learning Training Command](#machine-learning-training)
+6. [Examples](#examples)
 
 ---
 
@@ -34,6 +35,29 @@ python src/main.py <COMMAND> [OPTIONS]
 
 ---
 
+## Dataset Path Configuration
+
+The dataset path can be specified with the `-i` / `--input` option. If not provided, it defaults to `data/WESAD` relative to the project root.
+
+```bash
+# Use default dataset path (data/WESAD)
+python src/main.py -c
+
+# Specify custom dataset path (relative)
+python src/main.py -i data/WESAD -c
+
+# Specify custom dataset path (absolute)
+python src/main.py --input /absolute/path/to/WESAD -c
+
+# The -i flag works with all commands
+python src/main.py -i /data/WESAD -f
+python src/main.py -i ./my_dataset -m
+```
+
+The `-i` flag is available as a common option for all three commands (correlation, visualization, ML).
+
+---
+
 ## Correlation Analysis
 
 ### Command Syntax
@@ -50,6 +74,7 @@ Extracts HRV (Heart Rate Variability) features from ECG signals and generates co
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
+| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
 | `-f` | `--features` | string+ | `all` | Features to analyze (space-separated list) |
 | `-d` | `--dataset` | int+ | `30 120 300` | Dataset durations in seconds |
 | `-o` | `--output` | string | `../results/correlation_figures` | Output directory for figures |
@@ -81,6 +106,9 @@ python src/main.py -c -f mean_rr rmssd -d 30 300
 
 # Save results to custom output directory
 python src/main.py -c -o ./my_correlation_results
+
+# Use custom dataset path
+python src/main.py -i /path/to/WESAD -c
 ```
 
 ---
@@ -101,6 +129,7 @@ Plots the complete ECG signals with adjustable chunk size for visualization. Dis
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
+| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
 | `-p` | `--points` | int | `5000` | Number of points per plot chunk |
 | `-s` | `--subjects` | int+ | None (all) | Specific subject IDs to plot |
 | `-o` | `--output` | string | `../results/signal_plots` | Output directory for plots |
@@ -125,6 +154,9 @@ python src/main.py -f -s 0 3 5 -p 8000
 
 # Save results to custom directory
 python src/main.py -f -o ./my_signal_plots -p 7500
+
+# Use custom dataset path
+python src/main.py -i /path/to/WESAD -f
 ```
 
 ### Point Recommendations
@@ -150,6 +182,7 @@ Trains machine learning models on ECG chunks using 5-fold stratified cross-valid
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
+| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
 | `-d` | `--dataset` | int+ | `30 120 300` | Dataset durations in seconds |
 | `-mo` | `--models` | string+ | (all 7) | Models to train (space-separated) |
 | `-cv` | `--cross-val` | int | `5` | Number of CV folds |
@@ -190,6 +223,9 @@ python src/main.py -m -cv 10 -mo knn svm decision_tree
 
 # Save results to custom directory
 python src/main.py -m -o ./my_ml_results
+
+# Use custom dataset path
+python src/main.py -i /path/to/WESAD -m
 ```
 
 ### Classification Task
@@ -307,14 +343,18 @@ python src/main.py -m
 ```
 
 ### "Dataset not found" errors
-Verify WESAD data structure:
-```
+Verify WESAD data structure or specify the correct path with `-i`:
+```bash
+# Using default path
 data/WESAD/
 ├── S2/
 │   └── S2.pkl
 ├── S3/
 │   └── S3.pkl
 └── ...
+
+# Or specify a custom path
+python src/main.py -i /path/to/your/dataset -c
 ```
 
 ### Out of memory errors
@@ -334,4 +374,3 @@ python src/main.py -m -d 300 -mo knn svm  # Fewer models
 - Cross-validation is stratified to maintain class balance
 - Binary stress classification: {1,3}→0 (No-Stress), {2,4}→1 (Stress)
 - Sampling frequency: 700 Hz (WESAD standard)
-
