@@ -1,15 +1,20 @@
 # ECG-to-Stress Analysis
 
-A comprehensive toolkit for ECG signal analysis, feature extraction, correlation analysis, and machine learning model training on the [WESAD](https://archive.ics.uci.edu/dataset/421/wesad+wearable+stress+and+affect+detection) (Wearable Stress and Affect Detection) dataset.
+**Master's Thesis — Translating raw ECG signals into meaningful stress-level indicators using HRV features and machine learning.**
+
+This project provides a complete pipeline for loading raw ECG recordings from the [WESAD](https://archive.ics.uci.edu/dataset/421/wesad+wearable+stress+and+affect+detection) (Wearable Stress and Affect Detection) dataset, extracting HRV (Heart Rate Variability) features at multiple window sizes, visualizing signals in full detail, and training/evaluating classification models to detect stress vs. non-stress states.
+
+The goal is to explore how well standard HRV metrics — computed from chest-worn ECG — can discriminate between psychological conditions (baseline, stress, amusement, meditation) in a controlled lab setting, and which window durations and models yield the best performance.
+
 
 ## 📋 Overview
 
 This project provides tools to:
-- **Load and process** WESAD ECG signals
-- **Extract** HRV (Heart Rate Variability) features
-- **Visualize** full ECG signals with adjustable chunk sizes
-- **Analyze** feature correlations and distributions
-- **Train and evaluate** machine learning models for stress classification
+- **Load and process** WESAD ECG signals from raw pickle files
+- **Extract** 8 HRV features (mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio)
+- **Visualize** full ECG signals with label-aware coloring at adjustable chunk sizes
+- **Analyze** feature correlations and distributions (stress vs non-stress)
+- **Train and evaluate** 7 ML models with cross-validation for binary stress classification
 
 ## 🚀 Quick Start
 

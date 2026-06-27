@@ -20,6 +20,7 @@ import argparse
 import sys
 import os
 import warnings
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -403,39 +404,38 @@ def run_full_signal_visualization(args):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
-    
-    # Generate plots for each subject
-    subjects = args.subjects if args.subjects else range(len(ecgs))
+    # Determine which subject(s) to plot
+    if args.subjects:
+        # User-specified subjects
+        subjects = args.subjects
+        print(f"\U0001f3af Using specified subject(s): {subjects}")
+    else:
+        # Pick one random subject
+        subjects = [random.randint(0, len(ecgs) - 1)]
+        print(f"\U0001f3b2 No subject specified \u2014 randomly selected Subject {subjects[0]}")
     
     for idx in subjects:
         if idx >= len(ecgs):
-            print(f"⚠️  Subject {idx} not found (only {len(ecgs)} subjects available)")
+            print(f"\u26a0\ufe0f  Subject {idx} not found (only {len(ecgs)} subjects available)")
             continue
         
-        print(f"\n📌 Processing Subject {idx}...")
         ecg = ecgs[idx]
         label = labels[idx]
         
-        # Limit the number of chunks to prevent memory issues
         total_chunks = max(1, (len(ecg) + args.points - 1) // args.points)
-        max_chunks_to_plot = min(total_chunks, 50)  # Cap at 50 chunks to avoid memory exhaustion
-        
-        if total_chunks > max_chunks_to_plot:
-            print(f"⚠️  ECG signal has {total_chunks} total chunks — limiting to first {max_chunks_to_plot} chunks")
-        else:
-            print(f"📊 Generating {total_chunks} plots...")
+        print(f"\n\U0001f4cc Processing Subject {idx} ({len(ecg)} samples = {total_chunks} chunks)\n")
         
         try:
-            # Generate rolling plots with specified chunk size (limited to max_chunks_to_plot)
+            # Generate ALL chunks (no cap) for the full signal
+            print(f"\U0001f4ca Generating all {total_chunks} plots for full signal...")
             figs = viz.plot_ecg_rolling(
                 ecg=ecg,
                 fs=700,
                 chunk_size=args.points,
-                max_chunks=max_chunks_to_plot,
+                max_chunks=None,  # No cap — plot the ENTIRE signal
                 label=label,
                 title=f"Subject {idx} - Full ECG Signal ({len(ecg)} samples)"
             )
-            
             # Save each figure
             for fig_idx, fig in enumerate(figs):
                 plot_path = output_path / f"subject_{idx:02d}_ecg_chunk_{fig_idx:04d}.png"

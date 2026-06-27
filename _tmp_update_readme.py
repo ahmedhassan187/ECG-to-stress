@@ -1,0 +1,14 @@
+with open('README.md', 'r', encoding='utf-8') as f:
+    content = f.read()
+
+old_intro = "# ECG-to-Stress Analysis\n\n**Master's Thesis — Translating raw ECG signals into meaningful stress-level indicators using HRV features and machine learning.**\n\nThis project provides a complete pipeline for loading raw ECG recordings from the [WESAD](https://archive.ics.uci.edu/dataset/421/wesad+wearable+stress+and+affect+detection) (Wearable Stress and Affect Detection) dataset, extracting HRV (Heart Rate Variability) features at multiple window sizes, visualizing signals in full detail, and training/evaluating classification models to detect stress vs. non-stress states.\n\nThe goal is to explore how well standard HRV metrics — computed from chest-worn ECG — can discriminate between psychological conditions (baseline, stress, amusement, meditation) in a controlled lab setting, and which window durations and models yield the best performance.\n\n\n## 📋 Overview\n\nThis project provides tools to:\n- **Load and process** WESAD ECG signals\n- **Extract** HRV (Heart Rate Variability) features\n- **Visualize** full ECG signals with adjustable chunk sizes\n- **Analyze** feature correlations and distributions\n- **Train and evaluate** machine learning models for stress classification"
+
+new_overview = "# ECG-to-Stress Analysis\n\n**Master's Thesis — Translating raw ECG signals into meaningful stress-level indicators using HRV features and machine learning.**\n\nThis project provides a complete pipeline for loading raw ECG recordings from the [WESAD](https://archive.ics.uci.edu/dataset/421/wesad+wearable+stress+and+affect+detection) (Wearable Stress and Affect Detection) dataset, extracting HRV (Heart Rate Variability) features at multiple window sizes, visualizing signals in full detail, and training/evaluating classification models to detect stress vs. non-stress states.\n\nThe goal is to explore how well standard HRV metrics — computed from chest-worn ECG — can discriminate between psychological conditions (baseline, stress, amusement, meditation) in a controlled lab setting, and which window durations and models yield the best performance.\n\n\n## 📋 Overview\n\nThis project provides tools to:\n- **Load and process** WESAD ECG signals from raw pickle files\n- **Extract** 8 HRV features (mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio)\n- **Visualize** full ECG signals with label-aware coloring at adjustable chunk sizes\n- **Analyze** feature correlations and distributions (stress vs non-stress)\n- **Train and evaluate** 7 ML models with cross-validation for binary stress classification"
+
+content = content.replace(old_intro, new_overview, 1)
+
+with open('README.md', 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print("README.md updated successfully!")
+
