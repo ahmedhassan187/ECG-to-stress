@@ -864,7 +864,7 @@ def run_ml_training(args):
                 
                 all_chunks.append(chunk)
                 # Binary classification: {1,3}->0 (No Stress), {2,4}->1 (Stress)
-                binary_label = 1 if chunk_label in [2, 4] else 0
+                binary_label = 1 if chunk_label in [2] else 0
                 all_labels.append(binary_label)
                 all_subject_ids.append(subj_id)
         

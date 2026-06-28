@@ -320,3 +320,76 @@ class Features:
     def get_lf_hf_ratio_batch(self, ecg_list):
         """Extract LF/HF ratio for a list of ECG signals."""
         return [self.get_lf_hf_ratio(ecg) for ecg in ecg_list]
+
+    # ---------------- FFT helpers ----------------
+    def compute_fft(self, ecg):
+        """
+        Compute the FFT of a single ECG chunk.
+
+        Steps:
+            1. Clean the ECG with neurokit2.
+            2. Remove the DC component (mean subtraction).
+            3. Apply a Hann window to reduce spectral leakage.
+            4. Compute the real FFT and return the magnitude spectrum
+               and the matching frequency axis (one-sided, Hz).
+
+        Parameters:
+        - ecg: 1D array-like ECG signal (one chunk).
+
+        Returns:
+        - freqs: 1D np.ndarray of positive frequencies in Hz.
+        - magnitude: 1D np.ndarray of FFT magnitudes (same length as freqs).
+        """
+        # Convert to numpy array (handle list / pandas input)
+        ecg = np.asarray(ecg, dtype=np.float64).flatten()
+
+        if ecg.size < 2:
+            return np.array([]), np.array([])
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            cleaned = nk.ecg_clean(ecg, sampling_rate=self.fs)
+
+        n = cleaned.size
+
+        # DC removal + Hann window to reduce spectral leakage
+        centered = cleaned - np.mean(cleaned)
+        window = np.hanning(n)
+        windowed = centered * window
+
+        # Real FFT (rfft) → one-sided spectrum
+        fft_vals = np.fft.rfft(windowed)
+        magnitude = np.abs(fft_vals) * (2.0 / np.sum(window))
+
+        freqs = np.fft.rfftfreq(n, d=1.0 / self.fs)
+
+        return freqs, magnitude
+
+    def compute_fft_batch(self, ecg_list, verbose=True):
+        """
+        Compute the FFT for every ECG chunk in a list.
+
+        Parameters:
+        - ecg_list: list of ECG signal arrays (chunks).
+        - verbose: print progress every 10 chunks.
+
+        Returns:
+        - results: list of tuples (freqs, magnitude) in the same order
+                   as ecg_list. Chunks that fail return empty arrays.
+        """
+        results = []
+
+        for i, ecg in enumerate(ecg_list):
+            if verbose and i % 10 == 0:
+                print(f"Computing FFT {i+1}/{len(ecg_list)}...")
+
+            try:
+                freqs, magnitude = self.compute_fft(ecg)
+                results.append((freqs, magnitude))
+            except Exception as e:
+                # Keep alignment with the input list using empty arrays
+                if verbose:
+                    print(f"  ⚠️ FFT failed on chunk {i+1}: {e}")
+                results.append((np.array([]), np.array([])))
+
+        return results
