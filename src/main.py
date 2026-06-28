@@ -1,7 +1,13 @@
 """
 ECG-to-Stress Analysis CLI
-Command-line interface for WESAD dataset analysis, feature extraction, correlation analysis, 
-and machine learning model training.
+Command-line interface for WESAD dataset analysis, feature extraction, correlation analysis,
+machine learning model training, and FFT frequency analysis.
+
+Label mapping (WESAD):
+    1 → Baseline   → Non-Stress (binary 0)
+    2 → Stress     → Stress     (binary 1)
+    3 → Amusement  → Non-Stress (binary 0)
+    4 → Meditation → Stress     (binary 1)
 
 Usage Examples:
     py src/main.py --help                           # Show help message
@@ -14,6 +20,9 @@ Usage Examples:
     py src/main.py -m                               # Train all models on all datasets
     py src/main.py --ml -d 30 120                   # Train models on 30s and 120s datasets
     py src/main.py -m -mo knn svm random_forest     # Train specific models on all datasets
+    py src/main.py --fft                            # Run FFT analysis (30s/120s/300s chunks)
+    py src/main.py --fft -d 30 120                  # FFT on specific durations only
+    py src/main.py --fft --fft-max-pairs 1000       # More cosine-similarity pairs
 """
 
 import argparse
@@ -24,13 +33,15 @@ import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
 from pathlib import Path
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, ConfusionMatrixDisplay
 
 # Automatically change to the ECG-to-stress directory if running from parent
 script_dir = Path(__file__).resolve().parent
@@ -69,7 +80,7 @@ warnings.filterwarnings('ignore')
 def parse_arguments():
     """
     Parse command-line arguments using argparse.
-    
+
     Returns:
         Namespace: parsed arguments
     """
@@ -83,22 +94,27 @@ EXAMPLES:
   py src/main.py -c                              # All features
   py src/main.py --corr --features mean_rr mean_hr  # Specific features
   py src/main.py -i data/WESAD -c                # Custom dataset path
-  
+
   # Full Signal Visualization
   py src/main.py -f                              # Default 5000 points per chunk
   py src/main.py --full -p 10000                 # 10000 points per chunk
-  
+
   # Machine Learning Models
   py src/main.py -m                              # All models, all datasets
   py src/main.py -m -d 30 120 300                # Specific datasets (30s, 120s, 300s)
   py src/main.py -m -mo knn svm xgboost          # Specific models
   py src/main.py -m -d 30 -mo random_forest      # Specific dataset + models
+
+  # FFT Frequency Analysis
+  py src/main.py --fft                           # All durations (30s/120s/300s)
+  py src/main.py --fft -d 30 120                 # FFT for 30s and 120s only
+  py src/main.py --fft --fft-max-pairs 1000      # More cosine-similarity pairs
         """
     )
-    
+
     # Create mutually exclusive group for commands
     commands = parser.add_mutually_exclusive_group()
-    
+
     # ========== CORRELATION COMMAND ==========
     commands.add_argument(
         '-c', '--corr',
@@ -106,7 +122,7 @@ EXAMPLES:
         dest='correlation',
         help='Generate correlation analysis of HRV features'
     )
-    
+
     # ========== FULL SIGNAL COMMAND ==========
     commands.add_argument(
         '-f', '--full',
@@ -114,7 +130,7 @@ EXAMPLES:
         dest='full_signal',
         help='Plot full ECG signals with adjustable chunk size'
     )
-    
+
     # ========== ML MODELS COMMAND ==========
     commands.add_argument(
         '-m', '--ml',
@@ -122,7 +138,15 @@ EXAMPLES:
         dest='ml_training',
         help='Train machine learning models with cross-validation'
     )
-    
+
+    # ========== FFT ANALYSIS COMMAND ==========
+    commands.add_argument(
+        '--fft',
+        action='store_true',
+        dest='fft_analysis',
+        help='Run FFT frequency analysis with cosine similarity (stress vs non-stress)'
+    )
+
     # ========== CORRELATION OPTIONS ==========
     corr_group = parser.add_argument_group('Correlation Analysis Options')
     corr_group.add_argument(
@@ -132,7 +156,7 @@ EXAMPLES:
         default=['all'],
         help='Features to analyze (default: all). Available: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio'
     )
-    
+
     # ========== SHARED OPTIONS ==========
     shared_group = parser.add_argument_group('Common Options')
     shared_group.add_argument(
@@ -152,9 +176,9 @@ EXAMPLES:
         '-o', '--output',
         type=str,
         default=None,
-        help='Output directory (default: results/{correlation_figures|signal_plots|ml_results})'
+        help='Output directory (default: results/{correlation_figures|signal_plots|ml_results|fft_analysis})'
     )
-    
+
     # ========== VISUALIZATION OPTIONS ==========
     viz_group = parser.add_argument_group('Full Signal Visualization Options')
     viz_group.add_argument(
@@ -170,7 +194,7 @@ EXAMPLES:
         default=None,
         help='Specific subject IDs to plot (default: all subjects)'
     )
-    
+
     # ========== ML OPTIONS ==========
     ml_group = parser.add_argument_group('Machine Learning Options')
     ml_group.add_argument(
@@ -185,6 +209,23 @@ EXAMPLES:
         type=int,
         default=5,
         help='Number of cross-validation folds (default: 5)'
+    )
+
+    # ========== FFT OPTIONS ==========
+    fft_group = parser.add_argument_group('FFT Analysis Options')
+    fft_group.add_argument(
+        '--fft-max-pairs',
+        type=int,
+        default=500,
+        dest='fft_max_pairs',
+        help='Maximum random pairs for cosine similarity (default: 500)'
+    )
+    fft_group.add_argument(
+        '--fft-freq-max',
+        type=float,
+        default=40.0,
+        dest='fft_freq_max',
+        help='Upper frequency limit for FFT plots in Hz (default: 40.0)'
     )
     
     return parser
@@ -365,24 +406,56 @@ def _compute_comparison_metrics(small_arr, large_arr, corr_analyzer):
 
 def _make_pairwise_table(durations, comparison_table, metric):
     """
-    Build an NxN comparison table (rows = small window, cols = large window)
-    for the given metric ('r', 'icc' or 'mae'). The diagonal is 1.0 (R/ICC)
-    or 0.0 (MAE); the table is symmetric.
+    Build an NxN comparison table (rows = duration, cols = duration) for the
+    given metric ('r', 'icc' or 'mae').
+
+    Each off-diagonal cell is the mean of that metric averaged across all HRV
+    features for that duration pair.  The diagonal is 1.0 (R / ICC) or 0.0 (MAE).
     """
-    n = len(durations)
+    n    = len(durations)
+    diag = 0.0 if metric == 'mae' else 1.0
     table = pd.DataFrame(index=durations, columns=durations, dtype=float)
+
     for i in range(n):
         for j in range(n):
             if i == j:
-                table.iloc[i, j] = 1.0 if metric != 'mae' else 0.0
-            elif i < j:
-                key = (durations[i], durations[j])
-                table.iloc[i, j] = comparison_table.get(key, {}).get(metric, np.nan)
+                table.iloc[i, j] = diag
             else:
-                key = (durations[j], durations[i])
-                table.iloc[i, j] = comparison_table.get(key, {}).get(metric, np.nan)
-    table.index.name = 'small_duration_s'
-    table.columns.name = 'large_duration_s'
+                small = durations[min(i, j)]
+                large = durations[max(i, j)]
+                feat_dict = comparison_table.get((small, large), {})
+                # feat_dict: {feature_name: {'r', 'icc', 'mae', 'n'}}
+                vals = [v[metric] for v in feat_dict.values()
+                        if isinstance(v, dict) and not np.isnan(v.get(metric, np.nan))]
+                table.iloc[i, j] = np.mean(vals) if vals else np.nan
+
+    table.index.name   = 'Duration (s)'
+    table.columns.name = 'Duration (s)'
+    return table
+
+
+def _make_pairwise_table_per_feature(durations, comparison_table, metric, feature):
+    """
+    Same as _make_pairwise_table but for a single HRV feature instead of
+    averaging across all features.
+    """
+    n    = len(durations)
+    diag = 0.0 if metric == 'mae' else 1.0
+    table = pd.DataFrame(index=durations, columns=durations, dtype=float)
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                table.iloc[i, j] = diag
+            else:
+                small = durations[min(i, j)]
+                large = durations[max(i, j)]
+                feat_dict = comparison_table.get((small, large), {})
+                val = feat_dict.get(feature, {}).get(metric, np.nan)
+                table.iloc[i, j] = val
+
+    table.index.name   = 'Duration (s)'
+    table.columns.name = 'Duration (s)'
     return table
 
 
@@ -418,18 +491,24 @@ def _plot_pairwise_table(table, metric, output_path, title):
 
 def _plot_per_comparison_bars(comparison_table, metric, output_path):
     """
-    Save a bar chart of per-comparison values for a given metric.
+    Save a bar chart of per-comparison values for a given metric,
+    averaged across all HRV features for each duration pair.
     """
-    keys = list(comparison_table.keys())
+    keys   = list(comparison_table.keys())
     labels = [f"{a}s vs {b}s" for a, b in keys]
-    vals = [comparison_table[k].get(metric, np.nan) for k in keys]
+    vals   = []
+    for k in keys:
+        feat_dict = comparison_table[k]
+        pair_vals = [v[metric] for v in feat_dict.values()
+                     if isinstance(v, dict) and not np.isnan(v.get(metric, np.nan))]
+        vals.append(np.mean(pair_vals) if pair_vals else np.nan)
 
     fig, ax = plt.subplots(figsize=(max(8, len(keys) * 1.2), 5))
     bars = ax.bar(labels, vals, color='steelblue', edgecolor='black')
-    ax.set_ylabel(metric.upper())
-    ax.set_title(f"{metric.upper()} for each duration pair")
+    ax.set_ylabel(f'{metric.upper()} (mean across features)')
+    ax.set_title(f"{metric.upper()} for each duration pair (mean across HRV features)")
     finite = [v for v in vals if not np.isnan(v)]
-    upper = max(finite + [1]) * 1.15
+    upper  = max(finite + [1]) * 1.15
     ax.set_ylim(0, upper)
     ax.tick_params(axis='x', rotation=30)
     for bar, v in zip(bars, vals):
@@ -439,6 +518,159 @@ def _plot_per_comparison_bars(comparison_table, metric, output_path):
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
+
+
+def _plot_metric_summary_tables(durations, comparison_table, feature_list, output_path):
+    """
+    Render three styled NxN table images — one per metric (ICC, R, MAE) —
+    and one combined figure that shows all three side-by-side.
+
+    Layout of each NxN table (example with 30 / 120 / 300 s):
+
+              ICC
+           30    120   300
+      30 [  1   val  val ]
+     120 [ val   1   val ]
+     300 [ val  val   1  ]
+
+    Diagonal cells are grey (self-comparison sentinel: 1.0 for R/ICC, 0.0 for MAE).
+    Off-diagonal cells are colour-coded with RdYlGn (green = good agreement).
+    For MAE the colour map is inverted (lower = better).
+
+    Additionally saves per-feature tables so the user can drill down per feature.
+
+    Output files
+    ─────────────
+      corr_summary_table_<metric>.png     – standalone NxN table per metric
+      corr_summary_tables_combined.png    – all three tables in one figure
+      corr_per_feature_<feat>_<metric>.png – NxN table per feature × metric
+    """
+    METRICS = [
+        ('icc', 'ICC',  'RdYlGn',  False),
+        ('r',   'R',    'RdYlGn',  False),
+        ('mae', 'MAE',  'RdYlGn_r', True),   # reversed: lower MAE = better
+    ]
+
+    def _render_table_ax(ax, table, metric_label, cmap_name, invert, title):
+        """Draw a single NxN styled table onto ax."""
+        data = table.astype(float).values
+        n    = data.shape[0]
+        cols = [f'{c}s' for c in table.columns]
+        rows = [f'{r}s' for r in table.index]
+
+        cmap      = plt.get_cmap(cmap_name)
+        diag_val  = 0.0 if invert else 1.0   # sentinel on diagonal
+
+        # colour each cell
+        cell_colors = []
+        for i in range(n):
+            row_c = []
+            for j in range(n):
+                if i == j:
+                    row_c.append((0.88, 0.88, 0.88, 1.0))   # grey diagonal
+                else:
+                    v = data[i, j]
+                    if np.isnan(v):
+                        row_c.append((1.0, 1.0, 1.0, 1.0))  # white = no data
+                    else:
+                        # normalise into [0,1] for colour map
+                        vmin = np.nanmin(data[~np.eye(n, dtype=bool)])
+                        vmax = np.nanmax(data[~np.eye(n, dtype=bool)])
+                        norm = (v - vmin) / (vmax - vmin + 1e-9)
+                        row_c.append(cmap(norm))
+            cell_colors.append(row_c)
+
+        # cell text
+        cell_text = []
+        for i in range(n):
+            row_t = []
+            for j in range(n):
+                v = data[i, j]
+                if i == j:
+                    row_t.append('—')
+                elif np.isnan(v):
+                    row_t.append('N/A')
+                else:
+                    row_t.append(f'{v:.3f}')
+            cell_text.append(row_t)
+
+        ax.axis('off')
+        tbl = ax.table(
+            cellText=cell_text,
+            rowLabels=rows,
+            colLabels=cols,
+            cellColours=cell_colors,
+            cellLoc='center',
+            loc='center',
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(11)
+        tbl.scale(1.4, 2.0)
+
+        # bold the header row and index column
+        for (r, c), cell in tbl.get_celld().items():
+            if r == 0 or c == -1:
+                cell.set_text_props(fontweight='bold')
+
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=14)
+
+    # ── 1. individual table images ────────────────────────────────────────────
+    for metric_key, metric_label, cmap_name, invert in METRICS:
+        tbl = _make_pairwise_table(durations, comparison_table, metric_key)
+
+        cell_h  = max(0.6, 0.5 * len(durations))
+        fig_h   = max(3.5, cell_h * len(durations) + 1.5)
+        fig_w   = max(5.0, 1.6 * len(durations) + 1.5)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+        _render_table_ax(
+            ax, tbl, metric_label, cmap_name, invert,
+            title=f'{metric_label} – Mean across HRV features\n'
+                  f'(rows = reference duration, cols = comparison duration)'
+        )
+        fig.tight_layout()
+        p = output_path / f'corr_summary_table_{metric_key}.png'
+        fig.savefig(p, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"   ✓ Saved {metric_label} summary table: {p}")
+
+    # ── 2. combined figure (ICC | R | MAE side-by-side) ───────────────────────
+    fig, axes = plt.subplots(1, 3, figsize=(max(18, 6 * len(durations)), max(4, 1.8 * len(durations))))
+    for ax, (metric_key, metric_label, cmap_name, invert) in zip(axes, METRICS):
+        tbl = _make_pairwise_table(durations, comparison_table, metric_key)
+        _render_table_ax(ax, tbl, metric_label, cmap_name, invert,
+                         title=metric_label)
+
+    fig.suptitle('Cross-Duration Agreement Summary (mean across all HRV features)',
+                 fontsize=14, fontweight='bold', y=1.02)
+    fig.tight_layout()
+    p = output_path / 'corr_summary_tables_combined.png'
+    fig.savefig(p, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved combined summary tables: {p}")
+
+    # ── 3. per-feature breakdown tables ──────────────────────────────────────
+    print(f"   📋 Saving per-feature tables for {len(feature_list)} features × 3 metrics...")
+    for feature in feature_list:
+        fig, axes = plt.subplots(
+            1, 3,
+            figsize=(max(18, 6 * len(durations)), max(4, 1.8 * len(durations)))
+        )
+        for ax, (metric_key, metric_label, cmap_name, invert) in zip(axes, METRICS):
+            tbl = _make_pairwise_table_per_feature(
+                durations, comparison_table, metric_key, feature
+            )
+            _render_table_ax(ax, tbl, metric_label, cmap_name, invert,
+                             title=metric_label)
+
+        fig.suptitle(f'Cross-Duration Agreement – {feature}',
+                     fontsize=13, fontweight='bold', y=1.02)
+        fig.tight_layout()
+        p = output_path / f'corr_per_feature_{feature}.png'
+        fig.savefig(p, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"   ✓ Saved per-feature tables → corr_per_feature_<feature>.png")
 
 
 def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
@@ -657,7 +889,7 @@ def run_correlation_analysis(args):
         tbl_csv = output_path / f"comparison_table_{metric}.csv"
         tbl.to_csv(tbl_csv)
         print(f"✓ Saved {metric.upper()} table: {tbl_csv}")
-        print(f"\n{metric.upper()} comparison (rows = small window, cols = large window):")
+        print(f"\n{metric.upper()} comparison (mean across features):")
         print(tbl.to_string())
 
         # heat-map for the table
@@ -679,6 +911,10 @@ def run_correlation_analysis(args):
                 rows_for_csv, feat, metric,
                 output_path / f"{feat}_{metric}_comparison.png"
             )
+
+    # ---- styled NxN summary table images (ICC / R / MAE) ----
+    print("\n📋 Generating styled summary table images...")
+    _plot_metric_summary_tables(durations, comparison_table, feature_list, output_path)
 
     print("\n✅ Correlation analysis complete!")
 
@@ -864,7 +1100,7 @@ def run_ml_training(args):
                 
                 all_chunks.append(chunk)
                 # Binary classification: {1,3}->0 (No Stress), {2,4}->1 (Stress)
-                binary_label = 1 if chunk_label in [2] else 0
+                binary_label = 1 if chunk_label in [2, 4] else 0
                 all_labels.append(binary_label)
                 all_subject_ids.append(subj_id)
         
@@ -939,65 +1175,561 @@ def run_ml_training(args):
             except Exception as e:
                 print(f"   → {model_name.upper()}... ❌ Error: {e}")
         
-        # Save results summary
+        # ── Save results for this duration ────────────────────────────────────
         if all_results:
             summary_rows = []
             for model_name, result in all_results.items():
                 overall = result['overall']
                 summary_rows.append({
-                    'model': model_name,
-                    'accuracy_mean': overall['accuracy_mean'],
-                    'accuracy_std': overall['accuracy_std'],
-                    'f1_mean': overall['f1_mean'],
-                    'f1_std': overall['f1_std'],
-                    'precision_mean': overall['precision_mean'],
-                    'precision_std': overall['precision_std'],
-                    'recall_mean': overall['recall_mean'],
-                    'recall_std': overall['recall_std']
+                    'model'           : model_name,
+                    'accuracy_mean'   : overall['accuracy_mean'],
+                    'accuracy_std'    : overall['accuracy_std'],
+                    'f1_mean'         : overall['f1_mean'],
+                    'f1_std'          : overall['f1_std'],
+                    'precision_mean'  : overall['precision_mean'],
+                    'precision_std'   : overall['precision_std'],
+                    'recall_mean'     : overall['recall_mean'],
+                    'recall_std'      : overall['recall_std'],
                 })
-            
+
             summary_df = pd.DataFrame(summary_rows).set_index('model')
+
+            # ── 1. CSV summary ────────────────────────────────────────────────
             summary_path = output_path / f"ml_results_{duration}s.csv"
             summary_df.to_csv(summary_path)
-            print(f"✓ Saved results: {summary_path}")
-            
-            # Generate and save confusion matrices
-            viz = Visualization()
-            n_models = len(all_results)
-            if n_models > 0:
-                try:
-                    all_predictions = {}
-                    for model_name, result in all_results.items():
-                        all_predictions[model_name] = (result['y_true'], result['y_pred'])
-                    
-                    fig, axes = viz.plot_multiple_conf_mats(
-                        all_predictions,
-                        title=f'Confusion Matrices ({duration}s windows)'
-                    )
-                    cm_path = output_path / f"confusion_matrices_{duration}s.png"
-                    fig.savefig(cm_path, dpi=150, bbox_inches='tight')
-                    plt.close(fig)
-                    print(f"✓ Saved confusion matrices: {cm_path}")
-                except Exception as e:
-                    print(f"⚠️  Could not generate confusion matrix plots: {e}")
-        
+            print(f"✓ Saved results CSV: {summary_path}")
+
+            # ── 2. Model-comparison bar chart (accuracy + F1 side-by-side) ───
+            _plot_model_comparison(summary_df, duration, output_path)
+
+            # ── 3. Results table image ────────────────────────────────────────
+            _plot_results_table(summary_df, duration, output_path)
+
+            # ── 4. Individual confusion matrix per model ──────────────────────
+            _plot_confusion_matrices_grid(all_results, duration, output_path)
+
         print(f"✓ {duration}s dataset processing complete")
-    
+
     print("\n✅ ML model training complete!")
 
+
+# ── ML output helpers ─────────────────────────────────────────────────────────
+
+def _plot_model_comparison(summary_df, duration, output_path):
+    """
+    Grouped bar chart comparing Accuracy and F1 across all models for one
+    chunk duration.  Error bars show ±1 std from cross-validation.
+    Saved as  ml_model_comparison_{duration}s.png
+    """
+    models  = summary_df.index.tolist()
+    x       = np.arange(len(models))
+    width   = 0.35
+
+    metrics = {
+        'Accuracy': ('accuracy_mean', 'accuracy_std', '#1976D2'),
+        'F1 Score': ('f1_mean',       'f1_std',       '#388E3C'),
+    }
+
+    fig, ax = plt.subplots(figsize=(max(10, len(models) * 1.6), 6))
+
+    for i, (label, (mean_col, std_col, color)) in enumerate(metrics.items()):
+        offset = (i - len(metrics) / 2 + 0.5) * width
+        means  = summary_df[mean_col].values
+        stds   = summary_df[std_col].values
+        bars   = ax.bar(x + offset, means, width,
+                        label=label, color=color, alpha=0.88,
+                        edgecolor='black', linewidth=0.6)
+        ax.errorbar(x + offset, means, yerr=stds,
+                    fmt='none', color='black', capsize=4, linewidth=1)
+        for bar, m in zip(bars, means):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.007,
+                    f'{m:.3f}', ha='center', va='bottom', fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([m.replace('_', '\n') for m in models], fontsize=10)
+    ax.set_ylim(0, 1.12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_xlabel('Model', fontsize=12)
+    ax.set_title(f'Model Comparison – {duration}s Chunks\n(mean ± std over CV folds)',
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5, label='Chance')
+    ax.grid(axis='y', ls='--', alpha=0.4)
+
+    fig.tight_layout()
+    save_path = output_path / f"ml_model_comparison_{duration}s.png"
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ Saved comparison chart: {save_path}")
+
+
+def _plot_results_table(summary_df, duration, output_path):
+    """
+    Render the results summary as a styled table image.
+    Cells are colour-coded by value (green = high, red = low).
+    Saved as  ml_results_table_{duration}s.png
+    """
+    display_cols = ['accuracy_mean', 'accuracy_std',
+                    'f1_mean', 'f1_std',
+                    'precision_mean', 'precision_std',
+                    'recall_mean', 'recall_std']
+    col_labels   = ['Acc\nmean', 'Acc\n±std',
+                    'F1\nmean', 'F1\n±std',
+                    'Prec\nmean', 'Prec\n±std',
+                    'Rec\nmean', 'Rec\n±std']
+
+    data    = summary_df[display_cols].values
+    rows    = summary_df.index.tolist()
+    n_rows  = len(rows)
+    n_cols  = len(col_labels)
+
+    fig_h = max(3, 0.55 * n_rows + 1.5)
+    fig, ax = plt.subplots(figsize=(n_cols * 1.35, fig_h))
+    ax.axis('off')
+
+    # build cell colours: only colour mean columns (even indices), grey for std
+    cell_colors = []
+    cmap = plt.cm.RdYlGn
+    for r in range(n_rows):
+        row_colors = []
+        for c in range(n_cols):
+            if c % 2 == 0:                        # mean column → colour map
+                val = data[r, c]
+                rgba = cmap(val) if not np.isnan(val) else (0.9, 0.9, 0.9, 1)
+            else:                                 # std column → light grey
+                rgba = (0.96, 0.96, 0.96, 1)
+            row_colors.append(rgba)
+        cell_colors.append(row_colors)
+
+    table = ax.table(
+        cellText=[[f'{v:.4f}' for v in row] for row in data],
+        rowLabels=rows,
+        colLabels=col_labels,
+        cellColours=cell_colors,
+        cellLoc='center',
+        loc='center',
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.55)
+
+    ax.set_title(f'ML Results Summary – {duration}s Chunks\n'
+                 f'(green = high performance)',
+                 fontsize=12, fontweight='bold', pad=12)
+
+    fig.tight_layout()
+    save_path = output_path / f"ml_results_table_{duration}s.png"
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ Saved results table: {save_path}")
+
+
+def _plot_confusion_matrices_grid(all_results, duration, output_path):
+    """
+    One subplot per model, arranged in a grid.
+    Each subplot is a confusion matrix for the aggregated CV predictions.
+    Saved as  ml_confusion_matrices_{duration}s.png
+
+    Also saves individual per-model PNGs as
+    ml_cm_{model}_{duration}s.png  for easy inclusion in reports.
+    """
+    CLASS_NAMES = ['Non-Stress', 'Stress']
+    models      = list(all_results.keys())
+    n           = len(models)
+    if n == 0:
+        return
+
+    ncols = min(3, n)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(ncols * 4.5, nrows * 4.2))
+    # flatten axes always into 1-D list
+    if n == 1:
+        axes = [axes]
+    elif nrows == 1:
+        axes = list(axes)
+    else:
+        axes = [ax for row in axes for ax in row]
+
+    for ax, model_name in zip(axes, models):
+        result  = all_results[model_name]
+        y_true  = result.get('y_true', [])
+        y_pred  = result.get('y_pred', [])
+
+        if len(y_true) == 0:
+            ax.set_visible(False)
+            continue
+
+        disp = ConfusionMatrixDisplay.from_predictions(
+            y_true, y_pred,
+            display_labels=CLASS_NAMES,
+            cmap='Blues',
+            colorbar=False,
+            ax=ax,
+        )
+        overall = result['overall']
+        ax.set_title(
+            f'{model_name.replace("_", " ").title()}\n'
+            f'Acc={overall["accuracy_mean"]:.3f}  '
+            f'F1={overall["f1_mean"]:.3f}',
+            fontsize=10, fontweight='bold'
+        )
+
+        # ── also save standalone individual CM ──────────────────────────────
+        fig_ind, ax_ind = plt.subplots(figsize=(4.5, 4.0))
+        ConfusionMatrixDisplay.from_predictions(
+            y_true, y_pred,
+            display_labels=CLASS_NAMES,
+            cmap='Blues',
+            colorbar=False,
+            ax=ax_ind,
+        )
+        ax_ind.set_title(
+            f'{model_name.replace("_", " ").title()} – {duration}s\n'
+            f'Acc={overall["accuracy_mean"]:.3f}  F1={overall["f1_mean"]:.3f}',
+            fontsize=10, fontweight='bold'
+        )
+        fig_ind.tight_layout()
+        ind_path = output_path / f"ml_cm_{model_name}_{duration}s.png"
+        fig_ind.savefig(ind_path, dpi=150, bbox_inches='tight')
+        plt.close(fig_ind)
+
+    # hide any unused subplots in the grid
+    for ax in axes[n:]:
+        ax.set_visible(False)
+
+    fig.suptitle(f'Confusion Matrices – {duration}s Chunks',
+                 fontsize=14, fontweight='bold', y=1.01)
+    fig.tight_layout()
+    grid_path = output_path / f"ml_confusion_matrices_{duration}s.png"
+    fig.savefig(grid_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ Saved confusion matrix grid : {grid_path}")
+    print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s.png")
+
+
+# ── FFT Analysis ──────────────────────────────────────────────────────────────
+
+def run_fft_analysis(args):
+    """
+    FFT frequency analysis with cosine-similarity comparison.
+
+    For each chunk duration (-d, default 30/120/300 s):
+      1. Chunks all subjects into non-overlapping windows.
+      2. Computes FFT per chunk (via Features.compute_fft).
+      3. Plots mean spectrum ± std for stress vs. non-stress.
+      4. Overlays all durations on one figure per class.
+      5. Computes cosine similarity for three pair types:
+           • Stress  ↔  Non-stress   (cross-class)
+           • Stress  ↔  Stress       (within-stress)
+           • Non-stress ↔ Non-stress (within non-stress)
+      6. Saves KDE distribution plots and a grouped summary bar chart.
+
+    Label mapping used (binary):
+        1 (Baseline)   → 0  Non-Stress
+        2 (Stress)     → 1  Stress
+        3 (Amusement)  → 0  Non-Stress
+        4 (Meditation) → 1  Stress
+    """
+    print("\n" + "=" * 80)
+    print("FFT FREQUENCY ANALYSIS")
+    print("=" * 80)
+
+    # ── config ────────────────────────────────────────────────────────────────
+    FS          = 700
+    VALID_LABELS = [1, 2, 3, 4]
+    LABEL_MAP    = {1: 0, 2: 1, 3: 0, 4: 1}
+    LABEL_NAME   = {0: 'Non-Stress', 1: 'Stress'}
+    COLORS       = {0: '#2196F3', 1: '#F44336'}     # blue / red
+    FREQ_MAX     = args.fft_freq_max
+    MAX_PAIRS    = args.fft_max_pairs
+    durations    = sorted(set(args.dataset))
+
+    output_dir  = args.output or '../results/fft_analysis'
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory : {output_path}")
+    print(f"⏱️  Durations        : {durations} s")
+    print(f"🔢 Max cosine pairs : {MAX_PAIRS}")
+    print(f"📡 Freq limit       : {FREQ_MAX} Hz")
+
+    # ── load data ─────────────────────────────────────────────────────────────
+    data_loader       = Data(fs=FS)
+    feature_extractor = Features(fs=FS)
+    dataset_path      = _get_dataset_path(args)
+
+    print(f"\n📂 Loading dataset from: {dataset_path}")
+    try:
+        ecgs, labels = data_loader.read_dataset(str(dataset_path))
+        print(f"✓ Loaded {len(ecgs)} subjects")
+    except Exception as e:
+        print(f"❌ Error loading dataset: {e}")
+        return
+
+    # ── helper: spectrum interpolation ────────────────────────────────────────
+    def interp_spectrum(freqs, mag, common_freqs):
+        return np.interp(common_freqs, freqs, mag, left=0.0, right=0.0)
+
+    # ── step 1: chunk + FFT ───────────────────────────────────────────────────
+    results = {}   # results[duration] = {'freqs': ..., 'spectra': {0:[…], 1:[…]}}
+
+    for duration in durations:
+        chunk_size    = duration * FS
+        common_freqs  = np.fft.rfftfreq(chunk_size, d=1.0 / FS)
+        freq_mask     = common_freqs <= FREQ_MAX
+        common_freqs  = common_freqs[freq_mask]
+        spectra       = {0: [], 1: []}
+        n_chunks      = {0: 0, 1: 0}
+
+        print(f"\n⚙️  Computing FFT – {duration}s chunks...")
+        for ecg, label in zip(ecgs, labels):
+            valid_mask  = np.isin(label, VALID_LABELS)
+            valid_ecg   = ecg[valid_mask]
+            valid_label = label[valid_mask]
+
+            for start in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
+                chunk     = valid_ecg[start: start + chunk_size]
+                raw_lbl   = int(valid_label[start])
+                bin_lbl   = LABEL_MAP[raw_lbl]
+                try:
+                    f, m = feature_extractor.compute_fft(chunk)
+                    if f.size == 0:
+                        continue
+                    spectra[bin_lbl].append(interp_spectrum(f, m, common_freqs))
+                    n_chunks[bin_lbl] += 1
+                except Exception:
+                    pass
+
+        results[duration] = {'freqs': common_freqs, 'spectra': spectra}
+        total = n_chunks[0] + n_chunks[1]
+        print(f"   ✓ {total} chunks  (non-stress: {n_chunks[0]}, stress: {n_chunks[1]})")
+
+    # ── step 2: stacked mean-spectrum figure (one panel per duration) ─────────
+    print("\n📊 Plotting mean FFT spectra...")
+    fig, axes = plt.subplots(len(durations), 1,
+                             figsize=(14, 4.5 * len(durations)), sharex=False)
+    if len(durations) == 1:
+        axes = [axes]
+
+    for ax, duration in zip(axes, durations):
+        res     = results[duration]
+        freqs   = res['freqs']
+        spectra = res['spectra']
+        for bin_lbl, lname in LABEL_NAME.items():
+            mags = spectra[bin_lbl]
+            if not mags:
+                continue
+            arr  = np.stack(mags)
+            mean = arr.mean(axis=0)
+            std  = arr.std(axis=0)
+            ax.plot(freqs, mean, color=COLORS[bin_lbl], lw=1.8, label=lname)
+            ax.fill_between(freqs, mean - std, mean + std,
+                            color=COLORS[bin_lbl], alpha=0.18)
+        ax.axvspan(0.04, 0.15, color='gold',   alpha=0.12, label='LF (0.04–0.15 Hz)')
+        ax.axvspan(0.15, 0.40, color='orchid', alpha=0.12, label='HF (0.15–0.40 Hz)')
+        ax.set_xlim(0, FREQ_MAX)
+        ax.set_xlabel('Frequency (Hz)', fontsize=11)
+        ax.set_ylabel('Magnitude',      fontsize=11)
+        ns, ss = len(spectra[0]), len(spectra[1])
+        ax.set_title(f'Mean FFT – {duration}s  (non-stress n={ns}, stress n={ss})',
+                     fontsize=12)
+        ax.legend(fontsize=9)
+        ax.grid(True, ls='--', alpha=0.4)
+
+    fig.suptitle('ECG FFT: Stress vs. Non-Stress across Chunk Durations',
+                 fontsize=14, fontweight='bold', y=1.01)
+    fig.tight_layout()
+    p = output_path / 'fft_spectra_all_durations.png'
+    fig.savefig(p, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved: {p}")
+
+    # ── step 3: overlay plot – all durations on same axes ────────────────────
+    dur_colors  = {d: c for d, c in zip(durations, ['#1565C0', '#2E7D32', '#6A1B9A',
+                                                     '#E65100', '#4A148C'])}
+    dur_ls      = {d: ls for d, ls in zip(durations, ['-', '--', ':', '-.', (0, (3, 1, 1, 1))])}
+    fig, axes2  = plt.subplots(1, 2, figsize=(16, 5))
+    for bin_lbl, lname in LABEL_NAME.items():
+        ax = axes2[bin_lbl]
+        for dur in durations:
+            mags = results[dur]['spectra'][bin_lbl]
+            if not mags:
+                continue
+            arr  = np.stack(mags)
+            mean = arr.mean(axis=0)
+            ax.plot(results[dur]['freqs'], mean,
+                    color=dur_colors.get(dur, 'grey'),
+                    ls=dur_ls.get(dur, '-'),
+                    lw=1.8, label=f'{dur}s  (n={len(mags)})')
+        ax.axvspan(0.04, 0.15, color='gold',   alpha=0.10)
+        ax.axvspan(0.15, 0.40, color='orchid', alpha=0.10)
+        ax.set_xlim(0, FREQ_MAX)
+        ax.set_xlabel('Frequency (Hz)', fontsize=11)
+        ax.set_ylabel('Magnitude',      fontsize=11)
+        ax.set_title(f'{lname} – all chunk sizes', fontsize=12)
+        ax.legend(fontsize=9)
+        ax.grid(True, ls='--', alpha=0.4)
+    fig.suptitle('FFT Overlay – Effect of Chunk Duration',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    p = output_path / 'fft_overlay_durations.png'
+    fig.savefig(p, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved: {p}")
+
+    # ── step 4: cosine similarity ─────────────────────────────────────────────
+    print("\n📐 Computing cosine similarities...")
+    random.seed(42)
+    np.random.seed(42)
+
+    COMP_NAMES   = ['Stress ↔ Non-stress', 'Stress ↔ Stress', 'Non-stress ↔ Non-stress']
+    COMP_COLORS  = ['#E53935',             '#1E88E5',          '#43A047']
+
+    def _cos_sim(a, b):
+        na, nb = np.linalg.norm(a), np.linalg.norm(b)
+        return float(np.dot(a, b) / (na * nb)) if na > 0 and nb > 0 else np.nan
+
+    def _sample_pairs(list_a, list_b, max_p, same=False):
+        sims = []
+        if same:
+            candidates = [(i, j) for i in range(len(list_a))
+                          for j in range(i + 1, len(list_a))]
+        else:
+            candidates = [(i, j) for i in range(len(list_a))
+                          for j in range(len(list_b))]
+        chosen = random.sample(candidates, min(max_p, len(candidates)))
+        for i, j in chosen:
+            s = _cos_sim(list_a[i], list_b[j] if not same else list_a[j])
+            if not np.isnan(s):
+                sims.append(s)
+        return sims
+
+    cos_results = {}
+    for duration in durations:
+        spec_ns = results[duration]['spectra'][0]
+        spec_s  = results[duration]['spectra'][1]
+        cross     = _sample_pairs(spec_s,  spec_ns, MAX_PAIRS, same=False)
+        within_s  = _sample_pairs(spec_s,  spec_s,  MAX_PAIRS, same=True)
+        within_ns = _sample_pairs(spec_ns, spec_ns, MAX_PAIRS, same=True)
+        cos_results[duration] = {
+            'Stress ↔ Non-stress'    : cross,
+            'Stress ↔ Stress'        : within_s,
+            'Non-stress ↔ Non-stress': within_ns,
+        }
+        print(f"\n   {duration}s chunks:")
+        for cname, vals in cos_results[duration].items():
+            if vals:
+                print(f"     {cname:<30s} mean={np.mean(vals):.4f}  "
+                      f"std={np.std(vals):.4f}  n={len(vals)}")
+
+    # ── step 5: KDE distribution grid ────────────────────────────────────────
+    print("\n📊 Plotting cosine similarity distributions...")
+    fig, axes = plt.subplots(len(durations), len(COMP_NAMES),
+                             figsize=(18, 4 * len(durations)))
+    if len(durations) == 1:
+        axes = [axes]
+
+    for row, duration in enumerate(durations):
+        ax_row = axes[row] if len(durations) > 1 else axes[0]
+        for col, (comp, color) in enumerate(zip(COMP_NAMES, COMP_COLORS)):
+            ax   = ax_row[col]
+            vals = cos_results[duration][comp]
+            if vals:
+                sns.kdeplot(vals, ax=ax, color=color, fill=True, alpha=0.35, lw=2)
+                ax.axvline(np.mean(vals), color=color, lw=1.5, ls='--',
+                           label=f'mean={np.mean(vals):.3f}')
+                ax.legend(fontsize=8)
+            else:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center',
+                        transform=ax.transAxes)
+            ax.set_xlim(0, 1)
+            ax.set_xlabel('Cosine Similarity', fontsize=10)
+            ax.set_ylabel('Density',           fontsize=10)
+            ax.set_title(f'{duration}s – {comp}', fontsize=10)
+            ax.grid(True, ls='--', alpha=0.3)
+
+    fig.suptitle('Cosine Similarity of FFT Spectra – Stress vs. Non-Stress',
+                 fontsize=14, fontweight='bold', y=1.01)
+    fig.tight_layout()
+    p = output_path / 'fft_cosine_similarity_distributions.png'
+    fig.savefig(p, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved: {p}")
+
+    # ── step 6: summary bar chart + CSV ──────────────────────────────────────
+    summary_rows = []
+    for duration in durations:
+        for comp in COMP_NAMES:
+            vals = cos_results[duration][comp]
+            summary_rows.append({
+                'Duration (s)': f'{duration}s',
+                'Comparison'  : comp,
+                'Mean'        : np.mean(vals) if vals else np.nan,
+                'Std'         : np.std(vals)  if vals else np.nan,
+                'N pairs'     : len(vals),
+            })
+
+    summary_df = pd.DataFrame(summary_rows)
+    csv_path   = output_path / 'fft_cosine_summary.csv'
+    summary_df.to_csv(csv_path, index=False)
+    print(f"   ✓ Saved CSV: {csv_path}")
+
+    x      = np.arange(len(durations))
+    n_comp = len(COMP_NAMES)
+    width  = 0.22
+    fig, ax = plt.subplots(figsize=(max(10, len(durations) * 3.5), 5))
+
+    for i, (comp, color) in enumerate(zip(COMP_NAMES, COMP_COLORS)):
+        means = [np.mean(cos_results[d][comp]) if cos_results[d][comp] else np.nan
+                 for d in durations]
+        stds  = [np.std(cos_results[d][comp])  if cos_results[d][comp] else np.nan
+                 for d in durations]
+        offset = (i - n_comp / 2 + 0.5) * width
+        bars   = ax.bar(x + offset, means, width,
+                        color=color, alpha=0.88, label=comp,
+                        edgecolor='black', linewidth=0.5)
+        ax.errorbar(x + offset, means, yerr=stds,
+                    fmt='none', color='black', capsize=3, lw=1)
+        for bar, m in zip(bars, means):
+            if not np.isnan(m):
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + 0.005,
+                        f'{m:.3f}', ha='center', va='bottom', fontsize=7.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'{d}s' for d in durations], fontsize=11)
+    ax.set_xlabel('Chunk Duration', fontsize=11)
+    ax.set_ylabel('Mean Cosine Similarity', fontsize=11)
+    ax.set_ylim(0, 1.12)
+    ax.set_title('Mean FFT Cosine Similarity by Chunk Duration & Comparison Type',
+                 fontsize=12, fontweight='bold')
+    ax.legend(fontsize=9, loc='lower right')
+    ax.grid(axis='y', ls='--', alpha=0.4)
+    fig.tight_layout()
+    p = output_path / 'fft_cosine_summary_bar.png'
+    fig.savefig(p, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved: {p}")
+
+    print("\n✅ FFT analysis complete!")
+    print(f"   All outputs → {output_path.resolve()}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     """Main entry point for CLI application."""
     parser = parse_arguments()
-    
+
     # If no arguments provided, show help
     if len(sys.argv) == 1:
         parser.print_help()
         return
-    
+
     # Parse arguments
     args = parser.parse_args()
-    
+
     # Execute appropriate command based on flags
     if args.correlation:
         run_correlation_analysis(args)
@@ -1005,6 +1737,8 @@ def main():
         run_full_signal_visualization(args)
     elif args.ml_training:
         run_ml_training(args)
+    elif args.fft_analysis:
+        run_fft_analysis(args)
     else:
         parser.print_help()
 
