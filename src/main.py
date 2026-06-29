@@ -269,13 +269,14 @@ EXAMPLES:
     )
     pred_group.add_argument(
         '--pavia',
-        action='store_true',
-        default=False,
-        help='Use Pavia HRV data (data/pavia_features.csv + data/pavia_labels.csv) for prediction. '
-             'Automatically maps Pavia column names (HR,SDNN,rMSSD,...) to standard feature names '
-             'and filters out empty rows.'
+        nargs='?',
+        const='default',
+        default=None,
+        help='Use Pavia HRV data for prediction. Optionally specify path to folder containing '
+             'pavia_features.csv and pavia_labels.csv. '
+             'Example: --pavia  (default: data/),  --pavia /custom/path. '
+             'Can also use --test-data and --test-labels to specify exact CSV file paths.'
     )
-
 
     
     return parser
@@ -1804,7 +1805,7 @@ def run_fft_analysis(args):
 
 # ── PREDICTION MODE ──────────────────────────────────────────────────────────
 
-def _load_pavia_data(data_dir=None):
+def _load_pavia_data(data_dir=None, features_path=None, labels_path=None):
     """
     Load and prepare Pavia HRV data for prediction.
 
@@ -1823,6 +1824,9 @@ def _load_pavia_data(data_dir=None):
 
     Parameters:
         data_dir: path to the data directory (default: project_root / 'data')
+                  Used only when features_path / labels_path are not provided.
+        features_path: direct path to the features CSV file (overrides data_dir)
+        labels_path:   direct path to the labels CSV file (overrides data_dir)
 
     Returns:
         X: np.ndarray of shape (n_samples, 8) with standard feature ordering
@@ -1830,10 +1834,15 @@ def _load_pavia_data(data_dir=None):
         feature_names: list of standard feature column names
     """
     from pathlib import Path
-    data_dir = Path(data_dir) if data_dir else project_root / 'data'
 
-    features_path = data_dir / 'pavia_features.csv'
-    labels_path   = data_dir / 'pavia_labels.csv'
+    # Resolve feature/label paths
+    if features_path and labels_path:
+        features_path = Path(features_path)
+        labels_path   = Path(labels_path)
+    else:
+        data_dir = Path(data_dir) if data_dir else project_root / 'data'
+        features_path = data_dir / 'pavia_features.csv'
+        labels_path   = data_dir / 'pavia_labels.csv'
 
     if not features_path.exists():
         print(f"   ❌ Pavia features not found: {features_path}")
@@ -1986,10 +1995,21 @@ def run_prediction(args):
             continue
         
         # ── PAVIA MODE ────────────────────────────────────────────────────────────
-        if args.pavia:
+        if args.pavia is not None:
             print("   📋 Using Pavia HRV data for prediction...")
-            data_dir = args.input if args.input else project_root / 'data'
-            X_test, test_labels, loaded_feature_names = _load_pavia_data(data_dir)
+            if args.test_data and args.test_labels:
+                print(f"   Using direct paths: {args.test_data}, {args.test_labels}")
+                X_test, test_labels, loaded_feature_names = _load_pavia_data(
+                    features_path=args.test_data,
+                    labels_path=args.test_labels
+                )
+            elif args.pavia != 'default':
+                data_dir = args.pavia
+                print(f"   Using custom path: {data_dir}")
+                X_test, test_labels, loaded_feature_names = _load_pavia_data(data_dir)
+            else:
+                data_dir = args.input if args.input else project_root / 'data'
+                X_test, test_labels, loaded_feature_names = _load_pavia_data(data_dir)
             if X_test is None:
                 print("   ❌ Failed to load Pavia data. Skipping...")
                 continue
