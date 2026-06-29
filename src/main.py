@@ -252,8 +252,8 @@ EXAMPLES:
     pred_group.add_argument(
         '--model-dir',
         type=str,
-        default='../results/ml_models',
-        help='Directory containing trained models (default: ../results/ml_models)'
+        default='../results/ml_results/saved_models',
+        help='Directory containing trained models (default: ../results/ml_results/saved_models)'
     )
     pred_group.add_argument(
         '--test-data',
@@ -1808,7 +1808,16 @@ def run_prediction(args):
     print("\n" + "=" * 80)
     print("PREDICTION MODE")
     print("=" * 80)
-    
+
+    # Prediction mode defaults to the 30 s trained models, which is the
+    # canonical choice for cross-dataset evaluation (e.g. PAVIA). Pass
+    # `-d 30 120 300` (or any subset) to override.
+    if args.dataset == [30, 120, 300]:
+        durations_to_use = [30]
+        print("ℹ️  Defaulting to 30 s models (override with -d).")
+    else:
+        durations_to_use = args.dataset
+
     # Set default output directory
     output_dir = args.output or '../results/predictions'
     output_path = Path(output_dir)
@@ -1834,10 +1843,10 @@ def run_prediction(args):
     # Process each duration
     feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
     all_predictions = {}
-    
-    for duration in args.dataset:
+
+    for duration in durations_to_use:
         print(f"\n⏱️  Processing {duration}s chunks...")
-        
+
         # Load the trained models
         models = {}
         model_dir = Path(args.model_dir)
