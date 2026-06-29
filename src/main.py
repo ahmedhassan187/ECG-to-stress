@@ -267,6 +267,16 @@ EXAMPLES:
         default=None,
         help='Path to test labels CSV file (if using separate label file)'
     )
+    pred_group.add_argument(
+        '--pavia',
+        action='store_true',
+        default=False,
+        help='Use Pavia HRV data (data/pavia_features.csv + data/pavia_labels.csv) for prediction. '
+             'Automatically maps Pavia column names (HR,SDNN,rMSSD,...) to standard feature names '
+             'and filters out empty rows.'
+    )
+
+
     
     return parser
 
@@ -1794,16 +1804,125 @@ def run_fft_analysis(args):
 
 # ── PREDICTION MODE ──────────────────────────────────────────────────────────
 
+def _load_pavia_data(data_dir=None):
+    """
+    Load and prepare Pavia HRV data for prediction.
+
+    The Pavia CSV uses column names:
+        HR, SDNN, rMSSD, pNN50, SE, LF, HF, LFHF
+    which differ from the standard feature names:
+        mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio
+
+    This function:
+        1. Loads pavia_features.csv and pavia_labels.csv
+        2. Removes all-NaN (empty) rows
+        3. Maps Pavia column names to standard feature names
+        4. Computes mean_rr from HR (mean_rr = 60000 / HR)
+        5. Drops SE (Sample Entropy) which is not in the standard set
+        6. Aligns labels with the filtered feature rows
+
+    Parameters:
+        data_dir: path to the data directory (default: project_root / 'data')
+
+    Returns:
+        X: np.ndarray of shape (n_samples, 8) with standard feature ordering
+        y: np.ndarray of shape (n_samples,) with binary labels (0/1)
+        feature_names: list of standard feature column names
+    """
+    from pathlib import Path
+    data_dir = Path(data_dir) if data_dir else project_root / 'data'
+
+    features_path = data_dir / 'pavia_features.csv'
+    labels_path   = data_dir / 'pavia_labels.csv'
+
+    if not features_path.exists():
+        print(f"   ❌ Pavia features not found: {features_path}")
+        return None, None, None
+    if not labels_path.exists():
+        print(f"   ❌ Pavia labels not found: {labels_path}")
+        return None, None, None
+
+    # 1. Load raw data
+    raw_df  = pd.read_csv(features_path)
+    raw_labels = pd.read_csv(labels_path)
+    print(f"   ✓ Loaded {features_path.name} - shape {raw_df.shape}")
+    print(f"   ✓ Loaded {labels_path.name}   - shape {raw_labels.shape}")
+
+    # 2. Remove all-NaN rows (empty separators in CSV)
+    all_nan = raw_df.isna().all(axis=1)
+    n_empty = int(all_nan.sum())
+    if n_empty > 0:
+        print(f"   Removing {n_empty} empty row(s) from features")
+        valid_df = raw_df.dropna(how='all').reset_index(drop=True)
+        # Align labels: drop labels at same indices as empty feature rows
+        valid_labels = raw_labels.loc[~all_nan].reset_index(drop=True)
+    else:
+        valid_df = raw_df
+        valid_labels = raw_labels
+
+    # 3. Map Pavia column names to standard names
+    pavia_to_standard = {
+        'HR':    'mean_hr',
+        'SDNN':  'sdnn',
+        'rMSSD': 'rmssd',
+        'pNN50': 'pnn50',
+        'SE':    None,          # Sample Entropy - not in standard features
+        'LF':    'lf_power',
+        'HF':    'hf_power',
+        'LFHF':  'lf_hf_ratio',
+    }
+
+    # Rename columns
+    mapped = valid_df.rename(
+        columns={k: v for k, v in pavia_to_standard.items() if v is not None}
+    )
+    # Drop unmapped columns (e.g. SE)
+    cols_to_drop = [c for c in pavia_to_standard if pavia_to_standard[c] is None and c in mapped.columns]
+    if cols_to_drop:
+        mapped = mapped.drop(columns=cols_to_drop)
+
+    # 4. Compute mean_rr from HR
+    if 'mean_hr' in mapped.columns:
+        mapped['mean_rr'] = 60000.0 / mapped['mean_hr']
+
+    # 5. Select only the 8 standard features in the correct order
+    standard_features = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50',
+                         'lf_power', 'hf_power', 'lf_hf_ratio']
+    available_features = [f for f in standard_features if f in mapped.columns]
+    missing = [f for f in standard_features if f not in mapped.columns]
+    if missing:
+        print(f"   Missing features (will be filled as NaN): {missing}")
+
+    X = mapped[available_features].values.astype(np.float64)
+    y = valid_labels['label'].values.ravel().astype(int)
+
+    # 6. Handle any remaining NaN values
+    nan_count = np.isnan(X).sum()
+    if nan_count > 0:
+        print(f"   {int(nan_count)} NaN value(s) detected - imputing with column medians")
+        for col_idx in range(X.shape[1]):
+            col_median = np.nanmedian(X[:, col_idx])
+            if np.isnan(col_median):
+                col_median = 0.0
+            mask = np.isnan(X[:, col_idx])
+            X[mask, col_idx] = col_median
+
+    print(f"   Pavia data ready - {X.shape[0]} samples, {X.shape[1]} features")
+    print(f"   Labels - {len(y)} samples ({y.sum()} stress, {len(y)-y.sum()} non-stress)")
+    return X, y, standard_features
+
+
+
 def run_prediction(args):
     """
     Load trained models and make predictions on test data.
     
-    This function supports two modes:
-    1. WESAD dataset mode: Load test data from the same WESAD dataset
-    2. Custom CSV mode: Load features from CSV files
+    This function supports three modes:
+    1. Pavia mode (--pavia): Load Pavia HRV data from CSV with automatic column mapping
+    2. Custom CSV mode (--test-data): Load features from CSV files
+    3. WESAD dataset mode: Load test data from the same WESAD dataset
     
     Parameters:
-        args: parsed arguments containing prediction options
     """
     print("\n" + "=" * 80)
     print("PREDICTION MODE")
@@ -1866,12 +1985,19 @@ def run_prediction(args):
             print(f"   ❌ No models found for {duration}s duration. Skipping...")
             continue
         
-        # Load test data
-        test_data = None
-        test_labels = None
-        
-        # Try to load from CSV if provided
-        if args.test_data:
+        # ── PAVIA MODE ────────────────────────────────────────────────────────────
+        if args.pavia:
+            print("   📋 Using Pavia HRV data for prediction...")
+            data_dir = args.input if args.input else project_root / 'data'
+            X_test, test_labels, loaded_feature_names = _load_pavia_data(data_dir)
+            if X_test is None:
+                print("   ❌ Failed to load Pavia data. Skipping...")
+                continue
+            feature_names = loaded_feature_names
+            print(f"   ✓ Pavia data ready: {X_test.shape[0]} samples, {X_test.shape[1]} features")
+
+        # ── CUSTOM CSV MODE ────────────────────────────────────────────────────────
+        elif args.test_data:
             try:
                 test_data = pd.read_csv(args.test_data)
                 if args.test_labels:
@@ -1895,7 +2021,7 @@ def run_prediction(args):
                 print(f"   ❌ Error loading test data: {e}")
                 continue
                 
-        # Try to load from WESAD dataset
+        # ── WESAD DATASET MODE ─────────────────────────────────────────────────────
         else:
             try:
                 # Load WESAD data
