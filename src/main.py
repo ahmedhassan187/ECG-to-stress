@@ -160,7 +160,7 @@ EXAMPLES:
 
     # ========== PREDICTION COMMAND ==========
     commands.add_argument(
-        '-p', '--predict',
+        '--predict',
         action='store_true',
         dest='prediction',
         help='Load trained models and make predictions on test data'
