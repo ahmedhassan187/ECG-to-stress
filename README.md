@@ -1,6 +1,6 @@
 # ECG-to-Stress Analysis
 
-**Master's Thesis — Translating raw ECG signals into meaningful stress-level indicators using HRV features and machine learning.**
+**Translating raw ECG signals into meaningful stress-level indicators using HRV features and machine learning.**
 
 This project provides a complete pipeline for loading raw ECG recordings from the [WESAD](https://archive.ics.uci.edu/dataset/421/wesad+wearable+stress+and+affect+detection) (Wearable Stress and Affect Detection) dataset, extracting HRV (Heart Rate Variability) features at multiple window sizes, visualizing signals in full detail, and training/evaluating classification models to detect stress vs. non-stress states.
 
