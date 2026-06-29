@@ -23,6 +23,11 @@ Usage Examples:
     py src/main.py --fft                            # Run FFT analysis (30s/120s/300s chunks)
     py src/main.py --fft -d 30 120                  # FFT on specific durations only
     py src/main.py --fft --fft-max-pairs 1000       # More cosine-similarity pairs
+    
+    # PREDICTION MODE
+    py src/main.py -p predict -d 30                 # Predict on test data using 30s models
+    py src/main.py --predict -i data/test_data      # Predict on custom test data
+    py src/main.py -p predict -mo knn random_forest # Use specific models for prediction
 """
 
 import argparse
@@ -41,7 +46,8 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import mean_absolute_error, ConfusionMatrixDisplay
+from sklearn.metrics import mean_absolute_error, ConfusionMatrixDisplay, accuracy_score, f1_score, classification_report
+import joblib
 
 # Automatically change to the ECG-to-stress directory if running from parent
 script_dir = Path(__file__).resolve().parent
@@ -109,6 +115,11 @@ EXAMPLES:
   py src/main.py --fft                           # All durations (30s/120s/300s)
   py src/main.py --fft -d 30 120                 # FFT for 30s and 120s only
   py src/main.py --fft --fft-max-pairs 1000      # More cosine-similarity pairs
+  
+  # PREDICTION MODE
+  py src/main.py -p predict -d 30                # Predict on test data using 30s models
+  py src/main.py --predict -i data/test_data     # Predict on custom test data
+  py src/main.py -p predict -mo knn random_forest # Use specific models for prediction
         """
     )
 
@@ -145,6 +156,14 @@ EXAMPLES:
         action='store_true',
         dest='fft_analysis',
         help='Run FFT frequency analysis with cosine similarity (stress vs non-stress)'
+    )
+
+    # ========== PREDICTION COMMAND ==========
+    commands.add_argument(
+        '-p', '--predict',
+        action='store_true',
+        dest='prediction',
+        help='Load trained models and make predictions on test data'
     )
 
     # ========== CORRELATION OPTIONS ==========
@@ -226,6 +245,27 @@ EXAMPLES:
         default=40.0,
         dest='fft_freq_max',
         help='Upper frequency limit for FFT plots in Hz (default: 40.0)'
+    )
+
+    # ========== PREDICTION OPTIONS ==========
+    pred_group = parser.add_argument_group('Prediction Options')
+    pred_group.add_argument(
+        '--model-dir',
+        type=str,
+        default='../results/ml_models',
+        help='Directory containing trained models (default: ../results/ml_models)'
+    )
+    pred_group.add_argument(
+        '--test-data',
+        type=str,
+        default=None,
+        help='Path to test data CSV file with features (if not using WESAD dataset)'
+    )
+    pred_group.add_argument(
+        '--test-labels',
+        type=str,
+        default=None,
+        help='Path to test labels CSV file (if using separate label file)'
     )
     
     return parser
@@ -1075,6 +1115,11 @@ def run_ml_training(args):
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
     
+    # Create model saving directory
+    model_dir = output_path / 'saved_models'
+    model_dir.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Model save directory: {model_dir}")
+    
     # Process each dataset duration
     print(f"📊 Cross-validation folds: {args.cross_val}")
     
@@ -1168,10 +1213,13 @@ def run_ml_training(args):
                 )
                 all_results[model_name] = results[model_name]
                 
-                overall = results[model_name]['overall']
+                # Save the trained model
+                model_path = model_dir / f"{model_name}_{duration}s.pkl"
+                joblib.dump(model, model_path)
                 print(f"   → {model_name.upper()}... "
                       f"Accuracy: {overall['accuracy_mean']:.4f} (±{overall['accuracy_std']:.4f}), "
-                      f"F1: {overall['f1_mean']:.4f} (±{overall['f1_std']:.4f})")
+                      f"F1: {overall['f1_mean']:.4f} (±{overall['f1_std']:.4f}) "
+                      f"✓ Saved: {model_path}")
             except Exception as e:
                 print(f"   → {model_name.upper()}... ❌ Error: {e}")
         
@@ -1716,6 +1764,351 @@ def run_fft_analysis(args):
     print(f"   All outputs → {output_path.resolve()}")
 
 
+# ── PREDICTION MODE ──────────────────────────────────────────────────────────
+
+def run_prediction(args):
+    """
+    Load trained models and make predictions on test data.
+    
+    This function supports two modes:
+    1. WESAD dataset mode: Load test data from the same WESAD dataset
+    2. Custom CSV mode: Load features from CSV files
+    
+    Parameters:
+        args: parsed arguments containing prediction options
+    """
+    print("\n" + "=" * 80)
+    print("PREDICTION MODE")
+    print("=" * 80)
+    
+    # Set default output directory
+    output_dir = args.output or '../results/predictions'
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory: {output_path}")
+    
+    # Determine which models to use
+    available_models = [
+        'knn', 'svm', 'decision_tree', 'random_forest', 
+        'gradient_boosting', 'logistic_regression', 'xgboost'
+    ]
+    
+    requested_models = [m.lower() for m in args.models]
+    models_to_use = [m for m in requested_models if m in available_models]
+    models_to_use = _get_available_models(models_to_use)
+    
+    if not models_to_use:
+        print("❌ No valid models specified for prediction.")
+        return
+    
+    print(f"🤖 Models to use: {', '.join(models_to_use)}")
+    
+    # Process each duration
+    feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
+    all_predictions = {}
+    
+    for duration in args.dataset:
+        print(f"\n⏱️  Processing {duration}s chunks...")
+        
+        # Load the trained models
+        models = {}
+        model_dir = Path(args.model_dir)
+        
+        for model_name in models_to_use:
+            model_path = model_dir / f"{model_name}_{duration}s.pkl"
+            if model_path.exists():
+                try:
+                    models[model_name] = joblib.load(model_path)
+                    print(f"   ✓ Loaded {model_name.upper()} from {model_path}")
+                except Exception as e:
+                    print(f"   ❌ Failed to load {model_name.upper()}: {e}")
+            else:
+                print(f"   ⚠️  Model not found: {model_path}")
+        
+        if not models:
+            print(f"   ❌ No models found for {duration}s duration. Skipping...")
+            continue
+        
+        # Load test data
+        test_data = None
+        test_labels = None
+        
+        # Try to load from CSV if provided
+        if args.test_data:
+            try:
+                test_data = pd.read_csv(args.test_data)
+                if args.test_labels:
+                    test_labels = pd.read_csv(args.test_labels).values.ravel()
+                elif 'label' in test_data.columns:
+                    test_labels = test_data['label'].values
+                    test_data = test_data.drop('label', axis=1)
+                
+                # Ensure we have the right features
+                available_features = [f for f in feature_names if f in test_data.columns]
+                if len(available_features) != len(feature_names):
+                    print(f"   ⚠️  Missing some features. Available: {available_features}")
+                    # Use available features only
+                    X_test = test_data[available_features].values
+                else:
+                    X_test = test_data[feature_names].values
+                    
+                print(f"   ✓ Loaded test data: {X_test.shape[0]} samples")
+                
+            except Exception as e:
+                print(f"   ❌ Error loading test data: {e}")
+                continue
+                
+        # Try to load from WESAD dataset
+        else:
+            try:
+                # Load WESAD data
+                dataset_path = _get_dataset_path(args)
+                data_loader = Data(fs=700)
+                feature_extractor = Features(fs=700)
+                
+                print(f"   📂 Loading WESAD data from: {dataset_path}")
+                ecgs, labels = data_loader.read_dataset(str(dataset_path))
+                
+                # Use first subject as test (or random split could be implemented)
+                # For simplicity, use subject 0 as test
+                test_subject = 0
+                test_ecg = ecgs[test_subject]
+                test_label = labels[test_subject]
+                
+                # Filter valid labels
+                valid_mask = np.isin(test_label, [1, 2, 3, 4])
+                valid_ecg = test_ecg[valid_mask]
+                valid_label = test_label[valid_mask]
+                
+                # Chunk the test data
+                chunk_size = duration * 700
+                X_test = []
+                y_test = []
+                
+                for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
+                    chunk = valid_ecg[i:i + chunk_size]
+                    chunk_label = valid_label[i]
+                    
+                    try:
+                        features_dict = feature_extractor.get_hrv_features(chunk)
+                        feature_values = [
+                            features_dict.get(f, np.nan) for f in feature_names
+                        ]
+                        X_test.append(feature_values)
+                        # Binary classification: {1,3}->0 (No Stress), {2,4}->1 (Stress)
+                        binary_label = 1 if chunk_label in [2, 4] else 0
+                        y_test.append(binary_label)
+                    except:
+                        continue
+                
+                X_test = np.array(X_test)
+                y_test = np.array(y_test)
+                
+                # Handle NaN values
+                nan_mask = ~np.isnan(X_test).any(axis=1)
+                X_test = X_test[nan_mask]
+                y_test = y_test[nan_mask]
+                
+                # Impute remaining NaN with column medians
+                for col_idx in range(X_test.shape[1]):
+                    col_median = np.nanmedian(X_test[:, col_idx])
+                    if np.isnan(col_median):
+                        col_median = 0
+                    X_test[np.isnan(X_test[:, col_idx]), col_idx] = col_median
+                
+                print(f"   ✓ Loaded test subject {test_subject}: {X_test.shape[0]} chunks")
+                test_labels = y_test
+                
+            except Exception as e:
+                print(f"   ❌ Error loading WESAD test data: {e}")
+                continue
+        
+        if X_test is None or len(X_test) == 0:
+            print(f"   ⚠️  No test data available for {duration}s")
+            continue
+        
+        # Make predictions with each model
+        predictions = {}
+        y_pred_all = []
+        y_true = test_labels if test_labels is not None else None
+        
+        for model_name, model in models.items():
+            try:
+                y_pred = model.predict(X_test)
+                predictions[model_name] = y_pred
+                y_pred_all.append(y_pred)
+                
+                # Calculate metrics if we have true labels
+                if y_true is not None:
+                    acc = accuracy_score(y_true, y_pred)
+                    f1 = f1_score(y_true, y_pred, average='weighted')
+                    print(f"   → {model_name.upper()}: Accuracy={acc:.4f}, F1={f1:.4f}")
+                else:
+                    print(f"   → {model_name.upper()}: Predictions made (no labels for evaluation)")
+                    
+            except Exception as e:
+                print(f"   ❌ Error making predictions with {model_name.upper()}: {e}")
+        
+        all_predictions[duration] = {
+            'models': models,
+            'predictions': predictions,
+            'X_test': X_test,
+            'y_true': y_true
+        }
+        
+        # ── Plot predictions ──────────────────────────────────────────────────
+        if y_true is not None and predictions:
+            _plot_prediction_results(predictions, y_true, duration, output_path, feature_names)
+            _plot_prediction_comparison(predictions, y_true, duration, output_path)
+    
+    # ── Save all predictions to CSV ──────────────────────────────────────────
+    for duration, data in all_predictions.items():
+        if data['predictions']:
+            pred_df = pd.DataFrame(data['X_test'], columns=feature_names)
+            if data['y_true'] is not None:
+                pred_df['y_true'] = data['y_true']
+            for model_name, y_pred in data['predictions'].items():
+                pred_df[f'pred_{model_name}'] = y_pred
+            
+            csv_path = output_path / f"predictions_{duration}s.csv"
+            pred_df.to_csv(csv_path, index=False)
+            print(f"\n✓ Saved predictions to: {csv_path}")
+    
+    print("\n✅ Prediction complete!")
+
+
+def _plot_prediction_results(predictions, y_true, duration, output_path, feature_names):
+    """
+    Plot prediction results including confusion matrices and metrics.
+    """
+    CLASS_NAMES = ['Non-Stress', 'Stress']
+    n_models = len(predictions)
+    
+    # ── Confusion matrices grid ──────────────────────────────────────────────
+    ncols = min(3, n_models)
+    nrows = (n_models + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, 
+                             figsize=(ncols * 4.5, nrows * 4.0))
+    if n_models == 1:
+        axes = [axes]
+    elif nrows == 1:
+        axes = list(axes)
+    else:
+        axes = [ax for row in axes for ax in row]
+    
+    metrics_data = []
+    
+    for ax, (model_name, y_pred) in zip(axes, predictions.items()):
+        acc = accuracy_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred, average='weighted')
+        metrics_data.append({'model': model_name, 'accuracy': acc, 'f1': f1})
+        
+        disp = ConfusionMatrixDisplay.from_predictions(
+            y_true, y_pred,
+            display_labels=CLASS_NAMES,
+            cmap='Blues',
+            colorbar=False,
+            ax=ax,
+        )
+        ax.set_title(
+            f'{model_name.replace("_", " ").title()}\n'
+            f'Acc={acc:.3f}  F1={f1:.3f}',
+            fontsize=10, fontweight='bold'
+        )
+    
+    # Hide unused subplots
+    for ax in axes[n_models:]:
+        ax.set_visible(False)
+    
+    fig.suptitle(f'Prediction Results – {duration}s Chunks (Test Set)',
+                 fontsize=14, fontweight='bold', y=1.01)
+    fig.tight_layout()
+    save_path = output_path / f'prediction_confusion_{duration}s.png'
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved confusion matrices: {save_path}")
+    
+    # ── Metrics bar chart ─────────────────────────────────────────────────────
+    metrics_df = pd.DataFrame(metrics_data)
+    fig, ax = plt.subplots(figsize=(max(8, n_models * 1.6), 5))
+    
+    x = np.arange(len(metrics_df))
+    width = 0.35
+    
+    bars1 = ax.bar(x - width/2, metrics_df['accuracy'], width, 
+                   label='Accuracy', color='#1976D2', alpha=0.8)
+    bars2 = ax.bar(x + width/2, metrics_df['f1'], width,
+                   label='F1 Score', color='#388E3C', alpha=0.8)
+    
+    # Add value labels
+    for bar in bars1:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+    for bar in bars2:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels([m.replace('_', ' ').title() for m in metrics_df['model']], 
+                        rotation=15, ha='right')
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel('Score')
+    ax.set_title(f'Model Performance on Test Set – {duration}s Chunks')
+    ax.legend()
+    ax.grid(axis='y', ls='--', alpha=0.4)
+    
+    fig.tight_layout()
+    save_path = output_path / f'prediction_metrics_{duration}s.png'
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved metrics chart: {save_path}")
+    
+    # ── Print detailed classification report ──────────────────────────────────
+    print(f"\n   📊 Classification Report for {duration}s:")
+    print("-" * 50)
+    for model_name in predictions.keys():
+        y_pred = predictions[model_name]
+        print(f"\n   {model_name.upper()}:")
+        print(classification_report(y_true, y_pred, target_names=CLASS_NAMES, digits=3))
+
+
+def _plot_prediction_comparison(predictions, y_true, duration, output_path):
+    """
+    Plot comparison of predictions across models for a sample of test points.
+    """
+    n_samples = min(50, len(y_true))
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot true labels
+    x = np.arange(n_samples)
+    ax.scatter(x, y_true[:n_samples], color='black', s=30, 
+               marker='s', label='True Labels', zorder=5)
+    
+    # Plot predictions for each model with slight offset
+    offsets = np.linspace(-0.1, 0.1, len(predictions))
+    for i, (model_name, y_pred) in enumerate(predictions.items()):
+        offset = offsets[i]
+        ax.scatter(x + offset, y_pred[:n_samples], s=20, alpha=0.6,
+                   label=model_name.upper(), marker='o')
+    
+    ax.set_xlabel('Sample Index')
+    ax.set_ylabel('Class (0=Non-Stress, 1=Stress)')
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels(['Non-Stress', 'Stress'])
+    ax.set_title(f'Model Predictions Comparison – {duration}s Chunks (First {n_samples} samples)')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, ls='--', alpha=0.3)
+    
+    fig.tight_layout()
+    save_path = output_path / f'prediction_comparison_{duration}s.png'
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved predictions comparison: {save_path}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -1739,6 +2132,8 @@ def main():
         run_ml_training(args)
     elif args.fft_analysis:
         run_fft_analysis(args)
+    elif args.prediction:
+        run_prediction(args)
     else:
         parser.print_help()
 
