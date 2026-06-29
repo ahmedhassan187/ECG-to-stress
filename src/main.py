@@ -1195,16 +1195,16 @@ def run_ml_training(args):
         
         # Train each model
         print(f"🚀 Training {len(models_to_train)} models with {args.cross_val}-fold cross-validation...")
-        
+
         all_results = {}
         for model_name in models_to_train:
             model = _get_model(model_name)
             if model is None:
                 print(f"   → {model_name.upper()}... ⚠️ skipped (not available)")
                 continue
-            
+
             try:
-                # Use the ML class for evaluation
+                # Use the ML class for evaluation (only for CV metrics)
                 models_dict = {model_name: model}
                 results = ml_evaluator.eval_all(
                     df, models_dict, feature_names,
@@ -1212,13 +1212,41 @@ def run_ml_training(args):
                     cv_method='kfold'
                 )
                 all_results[model_name] = results[model_name]
-                
-                # Save the trained model
+                overall = results[model_name]['overall']
+
+                # Refit the model on the FULL dataset so the saved file is
+                # usable for inference on new data (e.g. PAVIA). CV above
+                # only fits per-fold clones which are then discarded.
+                try:
+                    from sklearn.base import clone as _clone
+                    final_model = _clone(model)
+                    final_model.fit(X, y)
+                except Exception as fit_err:
+                    print(f"   → {model_name.upper()}... "
+                          f"⚠️ Could not refit on full data: {fit_err}. "
+                          f"Saving unfitted model (prediction will fail).")
+                    final_model = model
+
+                # Save the trained model + a small metadata sidecar so
+                # downstream scripts (e.g. on PAVIA) know the expected
+                # feature order and label mapping.
                 model_path = model_dir / f"{model_name}_{duration}s.pkl"
-                joblib.dump(model, model_path)
+                joblib.dump(final_model, model_path)
+
+                meta_path = model_dir / f"{model_name}_{duration}s.meta.pkl"
+                joblib.dump({
+                    'feature_names': feature_names,
+                    'duration': duration,
+                    'label_mapping': {0: 'no_stress', 1: 'stress'},
+                    'label_source': 'wesad_binary (1,3)->0 ; (2,4)->1',
+                    'trained_on': 'wesad',
+                }, meta_path)
+
                 print(f"   → {model_name.upper()}... "
-                      f"Accuracy: {overall['accuracy_mean']:.4f} (±{overall['accuracy_std']:.4f}), "
-                      f"F1: {overall['f1_mean']:.4f} (±{overall['f1_std']:.4f}) "
+                      f"Accuracy: {overall['accuracy_mean']:.4f} "
+                      f"(±{overall['accuracy_std']:.4f}), "
+                      f"F1: {overall['f1_mean']:.4f} "
+                      f"(±{overall['f1_std']:.4f}) "
                       f"✓ Saved: {model_path}")
             except Exception as e:
                 print(f"   → {model_name.upper()}... ❌ Error: {e}")
