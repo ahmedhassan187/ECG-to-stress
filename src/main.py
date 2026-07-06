@@ -175,6 +175,12 @@ EXAMPLES:
         default=['all'],
         help='Features to analyze (default: all). Available: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio'
     )
+    corr_group.add_argument(
+        '--by-condition',
+        action='store_true',
+        dest='by_condition',
+        help='Also compute correlation metrics separately for stress (label 2) and non-stress (labels 1,3,4)'
+    )
 
     # ========== SHARED OPTIONS ==========
     shared_group = parser.add_argument_group('Common Options')
@@ -1134,7 +1140,124 @@ def run_correlation_analysis(args):
     print("\n📋 Generating combined table (r, ICC, MAE) for both comparisons...")
     _save_combined_table(comparison_table, durations, feature_list, output_path)
 
+    # ---- Per-condition analysis (stress / non-stress) ----
+    if getattr(args, 'by_condition', False):
+        print("\n" + "=" * 80)
+        print("PER-CONDITION ANALYSIS (stress vs non-stress)")
+        print("=" * 80)
+        STRESS_LABELS = {2}
+        NON_STRESS_LABELS = {1, 3, 4}
+
+        for cond_name, cond_labels in [('stress', STRESS_LABELS),
+                                       ('non_stress', NON_STRESS_LABELS)]:
+            _run_condition_correlation(
+                per_duration_features, per_duration_labels,
+                durations, feature_list, corr_analyzer,
+                cond_name, cond_labels, output_path
+            )
+
     print("\n✅ Correlation analysis complete!")
+
+
+def _filter_features_by_condition(per_subject_features, per_subject_labels, condition_labels):
+    """
+    Filter per-subject feature/label lists to keep only chunks whose label
+    is in condition_labels.
+    """
+    filtered_features = []
+    filtered_labels = []
+    for subj_feats, subj_labels in zip(per_subject_features, per_subject_labels):
+        keep_feats = []
+        keep_lbls = []
+        for f, l in zip(subj_feats, subj_labels):
+            if l in condition_labels:
+                keep_feats.append(f)
+                keep_lbls.append(l)
+        filtered_features.append(keep_feats)
+        filtered_labels.append(keep_lbls)
+    return filtered_features, filtered_labels
+
+
+def _run_condition_correlation(per_duration_features, per_duration_labels,
+                                durations, feature_list, corr_analyzer,
+                                condition_name, condition_labels, output_root):
+    """
+    Run the full per-condition correlation pipeline (pairwise comparison,
+    summary tables, bar charts) for a single condition (e.g. 'stress' or
+    'non_stress').
+    Results are saved to output_root / condition_name /  sub-directory.
+    """
+    cond_path = Path(str(output_root)) / condition_name
+    cond_path.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'=' * 60}")
+    print(f"  Per-condition: {condition_name.upper()}  "
+          f"(labels {sorted(condition_labels)})")
+    print(f"{'=' * 60}")
+
+    # Filter features for this condition
+    cond_feats = {}
+    cond_lbls  = {}
+    for d in durations:
+        cf, cl = _filter_features_by_condition(
+            per_duration_features[d], per_duration_labels[d], condition_labels
+        )
+        cond_feats[d] = cf
+        cond_lbls[d]  = cl
+        total = sum(len(s) for s in cf)
+        print(f"    {d}s: {total} chunks kept")
+
+    if len(durations) < 2:
+        return
+
+    # Build pairwise comparison table
+    comp_table = {}
+    for i, small in enumerate(durations):
+        for j, large in enumerate(durations):
+            if i >= j:
+                continue
+            ratio = large // small
+            if large % small != 0:
+                continue
+
+            comp_table[(small, large)] = {}
+            for feat in feature_list:
+                s_arr, l_arr = _build_pairwise_arrays(
+                    cond_feats[small], cond_feats[large], feat, ratio
+                )
+                metrics = _compute_comparison_metrics(s_arr, l_arr, corr_analyzer)
+                comp_table[(small, large)][feat] = metrics
+
+    # Save per-metric NxN tables + heatmaps
+    for metric in ('r', 'icc', 'mae'):
+        tbl = _make_pairwise_table(durations, comp_table, metric)
+        tbl.to_csv(cond_path / f"comparison_table_{metric}.csv")
+        _plot_pairwise_table(tbl, metric,
+                             cond_path / f"comparison_{metric}_heatmap.png",
+                             f"{metric.upper()} — {condition_name}")
+        _plot_per_comparison_bars(comp_table, metric,
+                                  cond_path / f"comparison_{metric}_bars.png")
+
+    # Styled summary table images
+    _plot_metric_summary_tables(durations, comp_table, feature_list, cond_path)
+
+    # Feature metric bar charts (sorted by mean)
+    METRICS_CFG = [
+        ('r',   'Pearson r',       -0.1, 1.05, 'feature_r_bars.png'),
+        ('icc', 'ICC (2,1)',       -0.1, 1.05, 'feature_icc_bars.png'),
+        ('mae', 'Mean Absolute Error', -0.05, None, 'feature_mae_bars.png'),
+    ]
+    for metric_key, metric_label, x_min, x_max, filename in METRICS_CFG:
+        _plot_feature_metric_bars(
+            comp_table, durations, feature_list,
+            metric_key, metric_label, x_min, x_max,
+            cond_path, filename
+        )
+
+    # Combined table (r, ICC, MAE) as one PNG
+    _save_combined_table(comp_table, durations, feature_list, cond_path)
+
+    print(f"   ✓ Saved {condition_name} results → {cond_path}")
 
 
 def run_full_signal_visualization(args):
