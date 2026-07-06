@@ -842,8 +842,6 @@ def _save_combined_table(comparison_table, durations, feature_list, output_path)
     coding and save as PNG using the Visualization class.
     Also saves a CSV backup.
     """
-    from src.visualization import Visualization
-
     rows = []
     for (small, large), feat_dict in comparison_table.items():
         comp_label = f'{small}s_vs_{large}s'
