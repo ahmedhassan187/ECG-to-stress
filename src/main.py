@@ -752,69 +752,67 @@ def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
     plt.close(fig)
 
 
-def _plot_feature_correlation_bars(comparison_table, durations, feature_list, output_path):
+def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_key,
+                              metric_label, x_min, x_max, output_path, filename):
     """
-    Save a horizontal bar chart: features sorted descending by mean Pearson R,
+    Save a horizontal bar chart for a given metric (r, ICC or MAE):
+    features sorted descending by the mean of that metric,
     with each duration pair shown as a separate bar side-by-side.
-    Each bar is labelled with the numeric r value.
+    Each bar is labelled with the numeric value.
     """
-    # Build a DataFrame: rows = features, columns = comparison labels, values = r
+    # Build a DataFrame: rows = features, columns = comparison labels, values = metric
     rows = []
     for (small, large), feat_dict in comparison_table.items():
         label = f'{small}s vs {large}s'
         for feat in feature_list:
             metrics = feat_dict.get(feat, {})
-            r_val = metrics.get('r', np.nan) if isinstance(metrics, dict) else np.nan
-            rows.append({'feature': feat, 'comparison': label, 'r': r_val})
+            val = metrics.get(metric_key, np.nan) if isinstance(metrics, dict) else np.nan
+            rows.append({'feature': feat, 'comparison': label, metric_key: val})
 
-    df_r = pd.DataFrame(rows)
-
-    # Pivot: features as rows, comparisons as columns, r as values
-    r_pivot = df_r.pivot_table(
-        index='feature', columns='comparison', values='r', aggfunc='first'
+    df_pivot = pd.DataFrame(rows).pivot_table(
+        index='feature', columns='comparison', values=metric_key, aggfunc='first'
     )
 
-    # Compute mean r across comparisons for sorting
-    r_pivot['mean_r'] = r_pivot.mean(axis=1)
-    r_pivot = r_pivot.sort_values('mean_r', ascending=True)  # lowest at bottom → highest at top
+    # Compute mean across comparisons for sorting (lowest at bottom → highest at top)
+    df_pivot['mean'] = df_pivot.mean(axis=1)
+    df_pivot = df_pivot.sort_values('mean', ascending=True)
 
-    fig, ax = plt.subplots(figsize=(10, 0.3 * len(r_pivot) + 1.5))
+    fig, ax = plt.subplots(figsize=(10, 0.3 * len(df_pivot) + 1.5))
 
-    features = r_pivot.index.tolist()
+    features = df_pivot.index.tolist()
     y = np.arange(len(features))
     bar_height = 0.35
 
-    # Assign colours to each comparison
-    comp_labels = [c for c in r_pivot.columns if c != 'mean_r']
+    comp_labels = [c for c in df_pivot.columns if c != 'mean']
     colors = ['#4C72B0', '#DD8452', '#55A868', '#C44E52', '#8172B2', '#937860']
     bars_list = []
 
     for i, comp in enumerate(comp_labels):
         offset = (i - (len(comp_labels) - 1) / 2) * bar_height
-        bars = ax.barh(y + offset, r_pivot[comp].values,
+        bars = ax.barh(y + offset, df_pivot[comp].values,
                        bar_height, label=comp,
                        color=colors[i % len(colors)], edgecolor='white')
         bars_list.append((bars, comp))
 
-    # Annotate each bar with the r value
+    # Annotate each bar with the value
     for bars, comp in bars_list:
-        for bar, r_val in zip(bars, r_pivot[comp].values):
-            if np.isnan(r_val):
+        for bar, val in zip(bars, df_pivot[comp].values):
+            if np.isnan(val):
                 continue
-            text = f'{r_val:.3f}'
-            if r_val >= 0:
-                ax.text(r_val + 0.01, bar.get_y() + bar.get_height() / 2,
+            text = f'{val:.3f}'
+            if val >= 0:
+                ax.text(val + 0.01, bar.get_y() + bar.get_height() / 2,
                         text, va='center', fontsize=8, fontweight='bold')
             else:
-                ax.text(r_val - 0.08, bar.get_y() + bar.get_height() / 2,
+                ax.text(val - 0.08, bar.get_y() + bar.get_height() / 2,
                         text, va='center', fontsize=8, fontweight='bold')
 
-    # Annotate the mean r on the right margin
-    for i, (feat, row) in enumerate(r_pivot.iterrows()):
-        mean_val = row['mean_r']
+    # Annotate the mean on the right margin
+    for i, (feat, row) in enumerate(df_pivot.iterrows()):
+        mean_val = row['mean']
         if np.isnan(mean_val):
             continue
-        ax.annotate(f'μ={mean_val:.3f}',
+        ax.annotate(f'\u03bc={mean_val:.3f}',
                     xy=(1, i), xycoords=('axes fraction', 'data'),
                     xytext=(5, 0), textcoords='offset points',
                     va='center', fontsize=7, fontstyle='italic', color='gray')
@@ -822,19 +820,87 @@ def _plot_feature_correlation_bars(comparison_table, durations, feature_list, ou
     # Styling
     ax.set_yticks(y)
     ax.set_yticklabels(features, fontsize=9)
-    ax.set_xlabel('Pearson r', fontsize=11)
-    ax.set_title('Feature Correlations by Duration Pair\n(sorted by mean r, descending)',
+    ax.set_xlabel(metric_label, fontsize=11)
+    ax.set_title(f'Feature {metric_label} by Duration Pair\n(sorted by mean, descending)',
                  fontsize=12, fontweight='bold')
     ax.axvline(0, color='black', linewidth=0.8)
     ax.legend(loc='lower right', fontsize=9)
-    ax.set_xlim(-0.1, 1.05)
+    if x_max is not None:
+        ax.set_xlim(x_min, x_max)
     ax.grid(axis='x', alpha=0.3)
 
     fig.tight_layout()
-    save_path = output_path / 'feature_correlation_bars.png'
+    save_path = output_path / filename
     fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
-    print(f"   ✓ Saved feature correlation bar chart: {save_path}")
+    print(f"   ✓ Saved {metric_label} bar chart: {save_path}")
+
+
+def _save_combined_table(comparison_table, durations, feature_list, output_path):
+    """
+    Build a combined pivot table (features × metrics × comparisons) with colour
+    coding and save as PNG using the Visualization class.
+    Also saves a CSV backup.
+    """
+    from src.visualization import Visualization
+
+    rows = []
+    for (small, large), feat_dict in comparison_table.items():
+        comp_label = f'{small}s_vs_{large}s'
+        for feat in feature_list:
+            metrics = feat_dict.get(feat, {})
+            if not isinstance(metrics, dict):
+                continue
+            rows.append({
+                'feature': feat,
+                'comparison': comp_label,
+                'r': metrics.get('r', np.nan),
+                'ICC': metrics.get('icc', np.nan),
+                'MAE': metrics.get('mae', np.nan),
+            })
+
+    df = pd.DataFrame(rows)
+
+    # Pivot: features as rows, (metric, comparison) as columns
+    pivot = df.pivot_table(
+        index='feature',
+        columns='comparison',
+        values=['r', 'ICC', 'MAE'],
+        aggfunc='first'
+    )
+    pivot.columns = [f'{metric}_{comp}' for metric, comp in pivot.columns]
+
+    # Reorder columns so comparisons are grouped together
+    comp_labels_sorted = sorted(
+        {f'{s}s_vs_{l}s' for s, l in comparison_table.keys()},
+        key=lambda x: (int(x.split('s_vs_')[1].replace('s', '')), x)
+    )
+    col_order = []
+    for comp in comp_labels_sorted:
+        for metric in ['r', 'ICC', 'MAE']:
+            col_order.append(f'{metric}_{comp}')
+    pivot = pivot[col_order]
+
+    # Save as combined PNG
+    viz = Visualization()
+    viz.save_styled_df_as_png(
+        pivot,
+        str(output_path / 'correlation_combined_table.png'),
+        higher_is_better_cols=[c for c in pivot.columns
+                                if c.startswith('r_') or c.startswith('ICC_')],
+        lower_is_better_cols=[c for c in pivot.columns if c.startswith('MAE_')]
+    )
+
+    # Also save as CSV
+    pivot.round(4).to_csv(output_path / 'correlation_combined_table.csv')
+    print(f"   ✓ Saved combined table: {output_path / 'correlation_combined_table.png'}")
+    print(f"   ✓ Saved combined CSV:   {output_path / 'correlation_combined_table.csv'}")
+
+    # Also display inline
+    print("\n" + "=" * 80)
+    print("COMBINED TABLE — All Metrics for Both Duration Comparisons")
+    print("=" * 80)
+    print(pivot.round(4).to_string())
 
 
 def run_correlation_analysis(args):
@@ -1052,11 +1118,23 @@ def run_correlation_analysis(args):
     print("\n📋 Generating styled summary table images...")
     _plot_metric_summary_tables(durations, comparison_table, feature_list, output_path)
 
-    # ---- feature correlation bar chart (sorted descending by R) ----
-    print("\n📊 Generating feature correlation bar chart (sorted by mean R)...")
-    _plot_feature_correlation_bars(
-        comparison_table, durations, feature_list, output_path
-    )
+    # ---- feature metric bar charts (sorted descending by mean) ----
+    print("\n📊 Generating feature metric bar charts for R, ICC, MAE...")
+    METRICS_BAR_CONFIG = [
+        ('r',   'Pearson r',       -0.1, 1.05, 'feature_r_bars.png'),
+        ('icc', 'ICC (2,1)',       -0.1, 1.05, 'feature_icc_bars.png'),
+        ('mae', 'Mean Absolute Error', -0.05, None, 'feature_mae_bars.png'),
+    ]
+    for metric_key, metric_label, x_min, x_max, filename in METRICS_BAR_CONFIG:
+        _plot_feature_metric_bars(
+            comparison_table, durations, feature_list,
+            metric_key, metric_label, x_min, x_max,
+            output_path, filename
+        )
+
+    # ---- combined table (r, ICC, MAE) as a single PNG ----
+    print("\n📋 Generating combined table (r, ICC, MAE) for both comparisons...")
+    _save_combined_table(comparison_table, durations, feature_list, output_path)
 
     print("\n✅ Correlation analysis complete!")
 
