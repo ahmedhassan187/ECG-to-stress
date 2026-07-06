@@ -358,3 +358,86 @@ class ML:
         scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
         
         return scores, scores.mean(), scores.std()
+        X = df[feature_cols].values
+        y = df[label_col].values
+
+        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
+
+        return scores, scores.mean(), scores.std()
+
+    # ── Model factory ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_default_models():
+        """Return list of available model names (excluding optional deps)."""
+        return [
+            'knn', 'svm', 'decision_tree', 'random_forest',
+            'gradient_boosting', 'logistic_regression', 'xgboost'
+        ]
+
+    @staticmethod
+    def get_model(model_name, xgboost_available=False,
+                  XGBClassifier=None, random_state=42):
+        """
+        Create a model instance by name.
+
+        Parameters:
+            model_name: one of 'knn', 'svm', 'decision_tree', 'random_forest',
+                        'gradient_boosting', 'logistic_regression', 'xgboost'
+            xgboost_available: whether xgboost is installed
+            XGBClassifier: the XGBClassifier class (or None)
+            random_state: random seed
+
+        Returns:
+            model instance, or None if xgboost requested but not available
+        """
+        from sklearn.neighbors import KNeighborsClassifier
+        from sklearn.svm import SVC
+        from sklearn.tree import DecisionTreeClassifier
+        from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+        from sklearn.linear_model import LogisticRegression
+
+        models = {
+            'knn': KNeighborsClassifier(n_neighbors=5),
+            'svm': SVC(kernel='rbf', probability=True, random_state=random_state),
+            'decision_tree': DecisionTreeClassifier(random_state=random_state),
+            'random_forest': RandomForestClassifier(
+                n_estimators=100, random_state=random_state
+            ),
+            'gradient_boosting': GradientBoostingClassifier(
+                n_estimators=100, random_state=random_state
+            ),
+            'logistic_regression': LogisticRegression(
+                max_iter=1000, random_state=random_state
+            ),
+        }
+        if model_name == 'xgboost':
+            if xgboost_available and XGBClassifier is not None:
+                return XGBClassifier(
+                    n_estimators=100, random_state=random_state, verbosity=0
+                )
+            return None
+        return models.get(model_name)
+
+    @staticmethod
+    def get_available_models(requested_models, available_models,
+                             xgboost_available=False):
+        """
+        Filter requested models to only those that are available.
+
+        Parameters:
+            requested_models: list of model name strings
+            available_models: list of all valid model name strings
+            xgboost_available: whether xgboost is installed
+
+        Returns:
+            filtered list of model names
+        """
+        result = []
+        for m in requested_models:
+            if m not in available_models:
+                continue
+            if m == 'xgboost' and not xgboost_available:
+                continue
+            result.append(m)
+        return result

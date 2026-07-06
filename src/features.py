@@ -393,3 +393,58 @@ class Features:
                 results.append((np.array([]), np.array([])))
 
         return results
+
+    # ---------------- Batch feature extraction --------------------------------
+
+    def extract_features_for_duration(self, ecgs, labels, duration):
+        """
+        Extract HRV features for all subjects at a given window duration.
+
+        For each subject keeps a per-subject list of feature dicts so that
+        values from the smaller window can later be matched against the larger
+        window.
+
+        Parameters:
+            ecgs: list of ECG arrays (one per subject)
+            labels: list of label arrays (one per subject)
+            duration: chunk size in seconds
+            feature_extractor: Features instance
+
+        Returns:
+            per_subject_features: list (per subject) of list (per chunk) of dicts
+            per_subject_labels:   list (per subject) of list (per chunk) of labels
+        """
+        chunk_size = duration * 700  # 700 Hz sampling rate
+        per_subject_features = []
+        per_subject_labels = []
+
+        for ecg, label in zip(ecgs, labels):
+            valid_mask = np.isin(label, [1, 2, 3, 4])
+            valid_ecg = ecg[valid_mask]
+            valid_label = label[valid_mask]
+
+            subj_feats = []
+            subj_labels = []
+            for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
+                chunk = valid_ecg[i:i + chunk_size]
+                chunk_label = int(valid_label[i])
+                try:
+                    feats = {
+                        'mean_rr': self.get_mean_rr(chunk),
+                        'mean_hr': self.get_mean_hr(chunk),
+                        'sdnn': self.get_sdnn(chunk),
+                        'rmssd': self.get_rmssd(chunk),
+                        'pnn50': self.get_pnn50(chunk),
+                        'lf_power': self.get_lf_power(chunk),
+                        'hf_power': self.get_hf_power(chunk),
+                        'lf_hf_ratio': self.get_lf_hf_ratio(chunk),
+                    }
+                    subj_feats.append(feats)
+                    subj_labels.append(chunk_label)
+                except Exception:
+                    continue
+
+            per_subject_features.append(subj_feats)
+            per_subject_labels.append(subj_labels)
+
+        return per_subject_features, per_subject_labels

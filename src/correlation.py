@@ -437,3 +437,45 @@ class Correlation:
             return f"MAE = {mae_value:.3f} ({percentage:.1f}% of feature range)"
         else:
             return f"MAE = {mae_value:.3f}"
+    @staticmethod
+    def build_pairwise_arrays(per_subject_features_small,
+                               per_subject_features_large,
+                               feat_name, ratio):
+        """
+        Align values from a smaller window with a larger window by repetition.
+
+        For each subject, group the small-window values in blocks of ``ratio``
+        and pair them with the corresponding large-window value.
+
+        Parameters:
+            per_subject_features_small: list of lists of feature dicts (small win)
+            per_subject_features_large: list of lists of feature dicts (large win)
+            feat_name: feature key to extract (e.g. 'mean_rr')
+            ratio: large_window_sec / small_window_sec (e.g. 120/30 = 4)
+
+        Returns:
+            small_values: list of small-window feature values (flattened)
+            large_values: list of large-window values repeated to match length
+        """
+        import numpy as np
+        small_values = []
+        large_values = []
+
+        for subj_small, subj_large in zip(per_subject_features_small,
+                                           per_subject_features_large):
+            n_large = len(subj_large)
+            for block_idx in range(n_large):
+                start = block_idx * ratio
+                end = start + ratio
+                block_small = subj_small[start:end]
+                large_val = subj_large[block_idx].get(feat_name)
+                if large_val is None or np.isnan(large_val):
+                    continue
+                for s in block_small:
+                    small_val = s.get(feat_name)
+                    if small_val is not None and not np.isnan(small_val):
+                        small_values.append(small_val)
+                        large_values.append(large_val)
+
+        return small_values, large_values
+

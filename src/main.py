@@ -752,6 +752,91 @@ def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
     plt.close(fig)
 
 
+def _plot_feature_correlation_bars(comparison_table, durations, feature_list, output_path):
+    """
+    Save a horizontal bar chart: features sorted descending by mean Pearson R,
+    with each duration pair shown as a separate bar side-by-side.
+    Each bar is labelled with the numeric r value.
+    """
+    # Build a DataFrame: rows = features, columns = comparison labels, values = r
+    rows = []
+    for (small, large), feat_dict in comparison_table.items():
+        label = f'{small}s vs {large}s'
+        for feat in feature_list:
+            metrics = feat_dict.get(feat, {})
+            r_val = metrics.get('r', np.nan) if isinstance(metrics, dict) else np.nan
+            rows.append({'feature': feat, 'comparison': label, 'r': r_val})
+
+    df_r = pd.DataFrame(rows)
+
+    # Pivot: features as rows, comparisons as columns, r as values
+    r_pivot = df_r.pivot_table(
+        index='feature', columns='comparison', values='r', aggfunc='first'
+    )
+
+    # Compute mean r across comparisons for sorting
+    r_pivot['mean_r'] = r_pivot.mean(axis=1)
+    r_pivot = r_pivot.sort_values('mean_r', ascending=True)  # lowest at bottom → highest at top
+
+    fig, ax = plt.subplots(figsize=(10, 0.3 * len(r_pivot) + 1.5))
+
+    features = r_pivot.index.tolist()
+    y = np.arange(len(features))
+    bar_height = 0.35
+
+    # Assign colours to each comparison
+    comp_labels = [c for c in r_pivot.columns if c != 'mean_r']
+    colors = ['#4C72B0', '#DD8452', '#55A868', '#C44E52', '#8172B2', '#937860']
+    bars_list = []
+
+    for i, comp in enumerate(comp_labels):
+        offset = (i - (len(comp_labels) - 1) / 2) * bar_height
+        bars = ax.barh(y + offset, r_pivot[comp].values,
+                       bar_height, label=comp,
+                       color=colors[i % len(colors)], edgecolor='white')
+        bars_list.append((bars, comp))
+
+    # Annotate each bar with the r value
+    for bars, comp in bars_list:
+        for bar, r_val in zip(bars, r_pivot[comp].values):
+            if np.isnan(r_val):
+                continue
+            text = f'{r_val:.3f}'
+            if r_val >= 0:
+                ax.text(r_val + 0.01, bar.get_y() + bar.get_height() / 2,
+                        text, va='center', fontsize=8, fontweight='bold')
+            else:
+                ax.text(r_val - 0.08, bar.get_y() + bar.get_height() / 2,
+                        text, va='center', fontsize=8, fontweight='bold')
+
+    # Annotate the mean r on the right margin
+    for i, (feat, row) in enumerate(r_pivot.iterrows()):
+        mean_val = row['mean_r']
+        if np.isnan(mean_val):
+            continue
+        ax.annotate(f'μ={mean_val:.3f}',
+                    xy=(1, i), xycoords=('axes fraction', 'data'),
+                    xytext=(5, 0), textcoords='offset points',
+                    va='center', fontsize=7, fontstyle='italic', color='gray')
+
+    # Styling
+    ax.set_yticks(y)
+    ax.set_yticklabels(features, fontsize=9)
+    ax.set_xlabel('Pearson r', fontsize=11)
+    ax.set_title('Feature Correlations by Duration Pair\n(sorted by mean r, descending)',
+                 fontsize=12, fontweight='bold')
+    ax.axvline(0, color='black', linewidth=0.8)
+    ax.legend(loc='lower right', fontsize=9)
+    ax.set_xlim(-0.1, 1.05)
+    ax.grid(axis='x', alpha=0.3)
+
+    fig.tight_layout()
+    save_path = output_path / 'feature_correlation_bars.png'
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"   ✓ Saved feature correlation bar chart: {save_path}")
+
+
 def run_correlation_analysis(args):
     """
     Execute correlation analysis on HRV features.
@@ -966,6 +1051,12 @@ def run_correlation_analysis(args):
     # ---- styled NxN summary table images (ICC / R / MAE) ----
     print("\n📋 Generating styled summary table images...")
     _plot_metric_summary_tables(durations, comparison_table, feature_list, output_path)
+
+    # ---- feature correlation bar chart (sorted descending by R) ----
+    print("\n📊 Generating feature correlation bar chart (sorted by mean R)...")
+    _plot_feature_correlation_bars(
+        comparison_table, durations, feature_list, output_path
+    )
 
     print("\n✅ Correlation analysis complete!")
 

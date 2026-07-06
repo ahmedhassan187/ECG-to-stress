@@ -4,6 +4,9 @@ import os
 import pickle
 import warnings
 
+from pathlib import Path
+
+
 class Data:
     """
     Data class for reading and processing ECG data from WESAD dataset.
@@ -152,3 +155,118 @@ class Data:
         }
         
         return keep_ecg, keep_labels, discarded
+
+    # ── Utility ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_dataset_path(args, project_root=None):
+        """
+        Resolve the WESAD dataset path from CLI arguments or default.
+
+        Parameters:
+            args: parsed argparse namespace (may have .input)
+            project_root: Path to project root (used for default fallback)
+
+        Returns:
+            Path to the WESAD dataset directory
+        """
+        if args.input:
+            return Path(args.input)
+        if project_root:
+            return project_root / 'data' / 'WESAD'
+        return Path('data/WESAD')
+
+    @staticmethod
+    def load_pavia_data(data_dir=None, features_path=None, labels_path=None,
+                        project_root=None):
+        """
+        Load Pavia HRV data from CSV files and align to the 8 standard features.
+
+        Parameters:
+            data_dir: path to the data directory (default: project_root / 'data')
+            features_path: direct path to the features CSV (overrides data_dir)
+            labels_path:   direct path to the labels CSV (overrides data_dir)
+            project_root:  project root Path (used for default fallback)
+
+        Returns:
+            X: np.ndarray of shape (n_samples, 8) with standard feature ordering
+            y: np.ndarray of shape (n_samples,) with binary labels (0/1)
+            feature_names: list of standard feature column names
+        """
+        # Resolve feature/label paths
+        if features_path and labels_path:
+            features_path = Path(features_path)
+            labels_path = Path(labels_path)
+        else:
+            data_dir = Path(data_dir) if data_dir else (
+                project_root / 'data' if project_root else Path('data')
+            )
+            features_path = data_dir / 'pavia_features.csv'
+            labels_path = data_dir / 'pavia_labels.csv'
+
+        if not features_path.exists():
+            print(f"   ❌ Pavia features not found: {features_path}")
+            return None, None, None
+        if not labels_path.exists():
+            print(f"   ❌ Pavia labels not found: {labels_path}")
+            return None, None, None
+
+        raw_df = pd.read_csv(features_path)
+        raw_labels = pd.read_csv(labels_path)
+        print(f"   ✓ Loaded {features_path.name} - shape {raw_df.shape}")
+        print(f"   ✓ Loaded {labels_path.name}   - shape {raw_labels.shape}")
+
+        # Remove all-NaN rows
+        all_nan = raw_df.isna().all(axis=1)
+        n_empty = int(all_nan.sum())
+        if n_empty > 0:
+            print(f"   Removing {n_empty} empty row(s) from features")
+            valid_df = raw_df.dropna(how='all').reset_index(drop=True)
+            valid_labels = raw_labels.loc[~all_nan].reset_index(drop=True)
+        else:
+            valid_df = raw_df
+            valid_labels = raw_labels
+
+        # Map Pavia column names to standard names
+        pavia_to_standard = {
+            'HR': 'mean_hr', 'SDNN': 'sdnn', 'rMSSD': 'rmssd',
+            'pNN50': 'pnn50', 'SE': None, 'LF': 'lf_power',
+            'HF': 'hf_power', 'LFHF': 'lf_hf_ratio',
+        }
+        mapped = valid_df.rename(
+            columns={k: v for k, v in pavia_to_standard.items() if v is not None}
+        )
+        cols_to_drop = [
+            c for c in pavia_to_standard
+            if pavia_to_standard[c] is None and c in mapped.columns
+        ]
+        if cols_to_drop:
+            mapped = mapped.drop(columns=cols_to_drop)
+
+        # Compute mean_rr from HR
+        if 'mean_hr' in mapped.columns:
+            mapped['mean_rr'] = 60000.0 / mapped['mean_hr']
+
+        # Select only the 8 standard features
+        standard_features = [
+            'mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50',
+            'lf_power', 'hf_power', 'lf_hf_ratio'
+        ]
+        available_features = [f for f in standard_features if f in mapped.columns]
+        missing = set(standard_features) - set(available_features)
+        if missing:
+            print(f"   ⚠️  Missing standard features: {missing}")
+
+        X = mapped[available_features].values.astype(np.float64)
+        y = valid_labels.values.ravel().astype(int)
+
+        # Handle NaN in features
+        nan_mask = ~np.isnan(X).any(axis=1)
+        n_nan_rows = (~nan_mask).sum()
+        if n_nan_rows > 0:
+            print(f"   Removing {n_nan_rows} row(s) with NaN values")
+            X = X[nan_mask]
+            y = y[nan_mask]
+
+        print(f"   ✓ Pavia data ready: {X.shape[0]} samples, {X.shape[1]} features")
+        return X, y, available_features
