@@ -3,24 +3,25 @@ ECG-to-Stress Analysis CLI
 Command-line interface for WESAD dataset analysis, feature extraction, correlation analysis,
 machine learning model training, and FFT frequency analysis.
 
-Label mapping (WESAD):
-    1 → Baseline   → Non-Stress (binary 0)
-    2 → Stress     → Stress     (binary 1)
-    3 → Amusement  → Non-Stress (binary 0)
-    4 → Meditation → Stress     (binary 1)
+Label modes (controlled via --labels / -l):
+    binary  (default)  1→0, 2→1, 3→0, 4→1  (Non-Stress / Stress)
+    3class             1→0, 2→1, 3→2, 4→2  (Baseline / Stress / Amusement·Meditation)
 
 Usage Examples:
     py src/main.py --help                           # Show help message
     py src/main.py -i data/WESAD -c                 # Run correlation analysis with custom dataset path
     py src/main.py --input /path/to/data -c         # Same with long flag
     py src/main.py -c                               # Run correlation analysis (default dataset path)
+    py src/main.py -c -l 3class                     # 3-class correlation analysis
     py src/main.py --corr --features feature1 feature2  # Run correlation on specific features
     py src/main.py -f                               # Plot full ECG signals (default 5000 points)
     py src/main.py --full -p 10000                  # Plot with 10000 points per chunk
     py src/main.py -m                               # Train all models on all datasets
+    py src/main.py --ml -l 3class                   # 3-class ML training
     py src/main.py --ml -d 30 120                   # Train models on 30s and 120s datasets
     py src/main.py -m -mo knn svm random_forest     # Train specific models on all datasets
     py src/main.py --fft                            # Run FFT analysis (30s/120s/300s chunks)
+    py src/main.py --fft -l 3class                  # 3-class FFT analysis
     py src/main.py --fft -d 30 120                  # FFT on specific durations only
     py src/main.py --fft --fft-max-pairs 1000       # More cosine-similarity pairs
     
@@ -66,6 +67,7 @@ try:
     from visualization import Visualization
     from correlation import Correlation
     from ml import ML
+    from label_config import LabelConfig
 except ImportError as e:
     print(f"❌ Error importing modules: {e}")
     print("   Make sure you're in the ECG-to-stress project directory:")
@@ -81,6 +83,13 @@ except ImportError:
     XGBOOST_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
+
+
+# ── Global helper: create a LabelConfig from argparse namespace ───────────
+def _get_label_config(args):
+    """Create a LabelConfig from the parsed args (defaults to 'binary')."""
+    mode = getattr(args, 'labels', 'binary')
+    return LabelConfig(mode)
 
 
 def parse_arguments():
@@ -155,7 +164,7 @@ EXAMPLES:
         '--fft',
         action='store_true',
         dest='fft_analysis',
-        help='Run FFT frequency analysis with cosine similarity (stress vs non-stress)'
+        help='Run FFT frequency analysis with cosine similarity'
     )
 
     # ========== PREDICTION COMMAND ==========
@@ -196,6 +205,13 @@ EXAMPLES:
         type=int,
         default=[30, 120, 300],
         help='Dataset durations in seconds (default: 30 120 300)'
+    )
+    shared_group.add_argument(
+        '-l', '--labels',
+        type=str,
+        default='binary',
+        choices=['binary', '3class'],
+        help='Label scheme: binary (Non-Stress/Stress) or 3class (Baseline/Stress/Amusement·Meditation) (default: binary)'
     )
     shared_group.add_argument(
         '-o', '--output',
@@ -299,13 +315,11 @@ def _get_dataset_path(args):
         Path: resolved path to the WESAD dataset directory
     """
     if args.input is not None:
-        # If user provided a path, resolve it relative to the project root if relative
         input_path = Path(args.input)
         if not input_path.is_absolute():
             return project_root / input_path
         return input_path
     else:
-        # Default path: data/WESAD relative to project root
         return project_root / "data" / "WESAD"
 
 
@@ -386,33 +400,6 @@ def _build_pairwise_arrays(per_subject_features_small,
                            feat_name, ratio):
     """
     Align values from a smaller window with a larger window by repetition.
-
-    For each subject, group the small-window values in blocks of ``ratio``
-    (e.g. four 30s values per one 120s value) and pair them with the
-    corresponding large-window value. The large-window value is repeated
-    ``ratio`` times so both arrays have the same length.
-
-    Example:
-        30s values for one subject : [1, 2, 3, 4]
-        120s values for same subject: [2, 5, 1, 3]
-        ratio = 120 / 30 = 4
-
-        small = [1, 2, 3, 4]
-        large (repeated) = [2, 2, 2, 2, 5, 5, 5, 5, 1, 1, 1, 1, 3, 3, 3, 3]
-
-        Only the first ``ratio`` small values are kept (those matching the
-        first 120s chunk), giving [1, 2, 3, 4] vs [2, 2, 2, 2] for that
-        subject. The process repeats for every 120s chunk.
-
-    Parameters:
-        per_subject_features_small: per-subject list of per-chunk feature dicts
-        per_subject_features_large: per-subject list of per-chunk feature dicts
-        feat_name: feature to extract
-        ratio: large_duration / small_duration (must be integer)
-
-    Returns:
-        small_arr: 1D numpy array of small-window values
-        large_arr: 1D numpy array of large-window values, each repeated `ratio` times
     """
     small_vals = []
     large_vals = []
@@ -481,7 +468,6 @@ def _make_pairwise_table(durations, comparison_table, metric):
                 small = durations[min(i, j)]
                 large = durations[max(i, j)]
                 feat_dict = comparison_table.get((small, large), {})
-                # feat_dict: {feature_name: {'r', 'icc', 'mae', 'n'}}
                 vals = [v[metric] for v in feat_dict.values()
                         if isinstance(v, dict) and not np.isnan(v.get(metric, np.nan))]
                 table.iloc[i, j] = np.mean(vals) if vals else np.nan
@@ -492,10 +478,7 @@ def _make_pairwise_table(durations, comparison_table, metric):
 
 
 def _make_pairwise_table_per_feature(durations, comparison_table, metric, feature):
-    """
-    Same as _make_pairwise_table but for a single HRV feature instead of
-    averaging across all features.
-    """
+    """Same as _make_pairwise_table but for a single HRV feature."""
     n    = len(durations)
     diag = 0.0 if metric == 'mae' else 1.0
     table = pd.DataFrame(index=durations, columns=durations, dtype=float)
@@ -517,9 +500,7 @@ def _make_pairwise_table_per_feature(durations, comparison_table, metric, featur
 
 
 def _plot_pairwise_table(table, metric, output_path, title):
-    """
-    Save a heat-map figure of a pairwise comparison table.
-    """
+    """Save a heat-map figure of a pairwise comparison table."""
     data = table.astype(float).values
     if np.all(np.isnan(data)):
         return
@@ -547,10 +528,7 @@ def _plot_pairwise_table(table, metric, output_path, title):
 
 
 def _plot_per_comparison_bars(comparison_table, metric, output_path):
-    """
-    Save a bar chart of per-comparison values for a given metric,
-    averaged across all HRV features for each duration pair.
-    """
+    """Save a bar chart of per-comparison values for a given metric."""
     keys   = list(comparison_table.keys())
     labels = [f"{a}s vs {b}s" for a, b in keys]
     vals   = []
@@ -581,31 +559,11 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
     """
     Render three styled NxN table images — one per metric (ICC, R, MAE) —
     and one combined figure that shows all three side-by-side.
-
-    Layout of each NxN table (example with 30 / 120 / 300 s):
-
-              ICC
-           30    120   300
-      30 [  1   val  val ]
-     120 [ val   1   val ]
-     300 [ val  val   1  ]
-
-    Diagonal cells are grey (self-comparison sentinel: 1.0 for R/ICC, 0.0 for MAE).
-    Off-diagonal cells are colour-coded with RdYlGn (green = good agreement).
-    For MAE the colour map is inverted (lower = better).
-
-    Additionally saves per-feature tables so the user can drill down per feature.
-
-    Output files
-    ─────────────
-      corr_summary_table_<metric>.png     – standalone NxN table per metric
-      corr_summary_tables_combined.png    – all three tables in one figure
-      corr_per_feature_<feat>_<metric>.png – NxN table per feature × metric
     """
     METRICS = [
         ('icc', 'ICC',  'RdYlGn',  False),
         ('r',   'R',    'RdYlGn',  False),
-        ('mae', 'MAE',  'RdYlGn_r', True),   # reversed: lower MAE = better
+        ('mae', 'MAE',  'RdYlGn_r', True),
     ]
 
     def _render_table_ax(ax, table, metric_label, cmap_name, invert, title):
@@ -616,35 +574,31 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
         rows = [f'{r}s' for r in table.index]
 
         cmap      = plt.get_cmap(cmap_name)
-        diag_val  = 0.0 if invert else 1.0   # sentinel on diagonal
 
-        # colour each cell
         cell_colors = []
         for i in range(n):
             row_c = []
             for j in range(n):
                 if i == j:
-                    row_c.append((0.88, 0.88, 0.88, 1.0))   # grey diagonal
+                    row_c.append((0.88, 0.88, 0.88, 1.0))
                 else:
                     v = data[i, j]
                     if np.isnan(v):
-                        row_c.append((1.0, 1.0, 1.0, 1.0))  # white = no data
+                        row_c.append((1.0, 1.0, 1.0, 1.0))
                     else:
-                        # normalise into [0,1] for colour map
                         vmin = np.nanmin(data[~np.eye(n, dtype=bool)])
                         vmax = np.nanmax(data[~np.eye(n, dtype=bool)])
                         norm = (v - vmin) / (vmax - vmin + 1e-9)
                         row_c.append(cmap(norm))
             cell_colors.append(row_c)
 
-        # cell text
         cell_text = []
         for i in range(n):
             row_t = []
             for j in range(n):
                 v = data[i, j]
                 if i == j:
-                    row_t.append('—')
+                    row_t.append('\u2014')
                 elif np.isnan(v):
                     row_t.append('N/A')
                 else:
@@ -664,14 +618,13 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
         tbl.set_fontsize(11)
         tbl.scale(1.4, 2.0)
 
-        # bold the header row and index column
         for (r, c), cell in tbl.get_celld().items():
             if r == 0 or c == -1:
                 cell.set_text_props(fontweight='bold')
 
         ax.set_title(title, fontsize=13, fontweight='bold', pad=14)
 
-    # ── 1. individual table images ────────────────────────────────────────────
+    # individual table images
     for metric_key, metric_label, cmap_name, invert in METRICS:
         tbl = _make_pairwise_table(durations, comparison_table, metric_key)
 
@@ -682,7 +635,7 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
 
         _render_table_ax(
             ax, tbl, metric_label, cmap_name, invert,
-            title=f'{metric_label} – Mean across HRV features\n'
+            title=f'{metric_label} \u2013 Mean across HRV features\n'
                   f'(rows = reference duration, cols = comparison duration)'
         )
         fig.tight_layout()
@@ -691,12 +644,11 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
         plt.close(fig)
         print(f"   ✓ Saved {metric_label} summary table: {p}")
 
-    # ── 2. combined figure (ICC | R | MAE side-by-side) ───────────────────────
+    # combined figure
     fig, axes = plt.subplots(1, 3, figsize=(max(18, 6 * len(durations)), max(4, 1.8 * len(durations))))
     for ax, (metric_key, metric_label, cmap_name, invert) in zip(axes, METRICS):
         tbl = _make_pairwise_table(durations, comparison_table, metric_key)
-        _render_table_ax(ax, tbl, metric_label, cmap_name, invert,
-                         title=metric_label)
+        _render_table_ax(ax, tbl, metric_label, cmap_name, invert, title=metric_label)
 
     fig.suptitle('Cross-Duration Agreement Summary (mean across all HRV features)',
                  fontsize=14, fontweight='bold', y=1.02)
@@ -706,7 +658,7 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
     plt.close(fig)
     print(f"   ✓ Saved combined summary tables: {p}")
 
-    # ── 3. per-feature breakdown tables ──────────────────────────────────────
+    # per-feature breakdown tables
     print(f"   📋 Saving per-feature tables for {len(feature_list)} features × 3 metrics...")
     for feature in feature_list:
         fig, axes = plt.subplots(
@@ -717,23 +669,20 @@ def _plot_metric_summary_tables(durations, comparison_table, feature_list, outpu
             tbl = _make_pairwise_table_per_feature(
                 durations, comparison_table, metric_key, feature
             )
-            _render_table_ax(ax, tbl, metric_label, cmap_name, invert,
-                             title=metric_label)
+            _render_table_ax(ax, tbl, metric_label, cmap_name, invert, title=metric_label)
 
-        fig.suptitle(f'Cross-Duration Agreement – {feature}',
+        fig.suptitle(f'Cross-Duration Agreement \u2013 {feature}',
                      fontsize=13, fontweight='bold', y=1.02)
         fig.tight_layout()
         p = output_path / f'corr_per_feature_{feature}.png'
         fig.savefig(p, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    print(f"   ✓ Saved per-feature tables → corr_per_feature_<feature>.png")
+    print(f"   ✓ Saved per-feature tables \u2192 corr_per_feature_<feature>.png")
 
 
 def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
-    """
-    Save a per-feature bar chart of metric values across duration pairs.
-    """
+    """Save a per-feature bar chart of metric values across duration pairs."""
     pairs = sorted({(r['small_duration_s'], r['large_duration_s'])
                     for r in rows_for_csv if r['feature'] == feat})
     if not pairs:
@@ -745,7 +694,7 @@ def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
     fig, ax = plt.subplots(figsize=(max(6, len(pairs) * 1.2), 4.5))
     bars = ax.bar(labels, vals, color='teal', edgecolor='black')
     ax.set_ylabel(metric.upper())
-    ax.set_title(f"{feat} — {metric.upper()} by duration pair")
+    ax.set_title(f"{feat} \u2014 {metric.upper()} by duration pair")
     finite = [v for v in vals if not np.isnan(v)]
     ax.set_ylim(0, max(finite + [1]) * 1.15)
     ax.tick_params(axis='x', rotation=30)
@@ -760,13 +709,7 @@ def _plot_per_feature_bars(rows_for_csv, feat, metric, output_path):
 
 def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_key,
                               metric_label, x_min, x_max, output_path, filename):
-    """
-    Save a horizontal bar chart for a given metric (r, ICC or MAE):
-    features sorted descending by the mean of that metric,
-    with each duration pair shown as a separate bar side-by-side.
-    Each bar is labelled with the numeric value.
-    """
-    # Build a DataFrame: rows = features, columns = comparison labels, values = metric
+    """Save a horizontal bar chart for a given metric (r, ICC or MAE)."""
     rows = []
     for (small, large), feat_dict in comparison_table.items():
         label = f'{small}s vs {large}s'
@@ -779,7 +722,6 @@ def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_
         index='feature', columns='comparison', values=metric_key, aggfunc='first'
     )
 
-    # Compute mean across comparisons for sorting (lowest at bottom → highest at top)
     df_pivot['mean'] = df_pivot.mean(axis=1)
     df_pivot = df_pivot.sort_values('mean', ascending=True)
 
@@ -800,7 +742,6 @@ def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_
                        color=colors[i % len(colors)], edgecolor='white')
         bars_list.append((bars, comp))
 
-    # Annotate each bar with the value
     for bars, comp in bars_list:
         for bar, val in zip(bars, df_pivot[comp].values):
             if np.isnan(val):
@@ -813,7 +754,6 @@ def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_
                 ax.text(val - 0.08, bar.get_y() + bar.get_height() / 2,
                         text, va='center', fontsize=8, fontweight='bold')
 
-    # Annotate the mean on the right margin
     for i, (feat, row) in enumerate(df_pivot.iterrows()):
         mean_val = row['mean']
         if np.isnan(mean_val):
@@ -823,7 +763,6 @@ def _plot_feature_metric_bars(comparison_table, durations, feature_list, metric_
                     xytext=(5, 0), textcoords='offset points',
                     va='center', fontsize=7, fontstyle='italic', color='gray')
 
-    # Styling
     ax.set_yticks(y)
     ax.set_yticklabels(features, fontsize=9)
     ax.set_xlabel(metric_label, fontsize=11)
@@ -865,7 +804,6 @@ def _save_combined_table(comparison_table, durations, feature_list, output_path)
 
     df = pd.DataFrame(rows)
 
-    # Pivot: features as rows, (metric, comparison) as columns
     pivot = df.pivot_table(
         index='feature',
         columns='comparison',
@@ -874,7 +812,6 @@ def _save_combined_table(comparison_table, durations, feature_list, output_path)
     )
     pivot.columns = [f'{metric}_{comp}' for metric, comp in pivot.columns]
 
-    # Reorder columns so comparisons are grouped together
     comp_labels_sorted = sorted(
         {f'{s}s_vs_{l}s' for s, l in comparison_table.keys()},
         key=lambda x: (int(x.split('s_vs_')[1].replace('s', '')), x)
@@ -885,7 +822,6 @@ def _save_combined_table(comparison_table, durations, feature_list, output_path)
             col_order.append(f'{metric}_{comp}')
     pivot = pivot[col_order]
 
-    # Save as combined PNG
     viz = Visualization()
     viz.save_styled_df_as_png(
         pivot,
@@ -895,17 +831,19 @@ def _save_combined_table(comparison_table, durations, feature_list, output_path)
         lower_is_better_cols=[c for c in pivot.columns if c.startswith('MAE_')]
     )
 
-    # Also save as CSV
     pivot.round(4).to_csv(output_path / 'correlation_combined_table.csv')
     print(f"   ✓ Saved combined table: {output_path / 'correlation_combined_table.png'}")
     print(f"   ✓ Saved combined CSV:   {output_path / 'correlation_combined_table.csv'}")
 
-    # Also display inline
     print("\n" + "=" * 80)
-    print("COMBINED TABLE — All Metrics for Both Duration Comparisons")
+    print("COMBINED TABLE \u2014 All Metrics for Both Duration Comparisons")
     print("=" * 80)
     print(pivot.round(4).to_string())
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# CORRELATION ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════
 
 def run_correlation_analysis(args):
     """
@@ -913,36 +851,27 @@ def run_correlation_analysis(args):
 
     The analysis runs in two stages:
 
-    1.  Per-duration extraction — features are computed for every requested
-        window size (e.g. 30s, 120s, 300s) and the original chunks are kept
-        separately so smaller windows can later be mapped to larger windows
-        via repetition (e.g. four 30s chunks per one 120s chunk).
-
-    2.  Cross-duration comparison — for every ordered pair (small, large)
-        we align values by repeating the large-window value to match the
-        number of small chunks it covers, then compute Pearson R, ICC2 and
-        MAE. Results are written to a CSV and visualised as a heat-map and
-        a per-comparison bar chart.
+    1.  Per-duration extraction
+    2.  Cross-duration comparison (Pearson R, ICC2, MAE)
     """
     print("\n" + "="*80)
     print("CORRELATION ANALYSIS")
     print("="*80)
 
-    # Set default output directory if not specified
+    # Label configuration
+    label_cfg = _get_label_config(args)
+    print(f"📋 Label mode: {args.labels} \u2013 {label_cfg.description}")
+
     output_dir = args.output or '../results/correlation_figures'
 
-    # Initialize components
     data_loader = Data(fs=700)
     feature_extractor = Features(fs=700)
     corr_analyzer = Correlation()
     viz = Visualization()
 
-    # Get dataset path
     dataset_path = _get_dataset_path(args)
-
     print(f"📂 Loading dataset from: {dataset_path}")
 
-    # Load data
     try:
         ecgs, labels = data_loader.read_dataset(str(dataset_path))
         print(f"✓ Loaded {len(ecgs)} subjects")
@@ -950,16 +879,13 @@ def run_correlation_analysis(args):
         print(f"❌ Error loading dataset: {e}")
         return
 
-    # Create output directory
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
 
-    # Make sure durations are sorted and unique for the pairwise mapping
     durations = sorted(set(args.dataset))
     print(f"📏 Window durations: {durations}")
 
-    # Feature list
     all_feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd',
                          'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
     if 'all' in args.features:
@@ -967,9 +893,7 @@ def run_correlation_analysis(args):
     else:
         feature_list = [f for f in args.features if f in all_feature_names]
 
-    # ------------------------------------------------------------------
     # Stage 1: extract features for every duration
-    # ------------------------------------------------------------------
     per_duration_features = {}
     per_duration_labels   = {}
     per_duration_dfs      = {}
@@ -988,7 +912,6 @@ def run_correlation_analysis(args):
         per_duration_features[duration] = per_subj_feats
         per_duration_labels[duration] = per_subj_labels
 
-        # Flatten for the per-duration outputs (legacy behaviour)
         flat_rows = []
         for subj_feats, subj_labels in zip(per_subj_feats, per_subj_labels):
             for fdict, lbl in zip(subj_feats, subj_labels):
@@ -999,7 +922,6 @@ def run_correlation_analysis(args):
         per_duration_dfs[duration] = df
         print(f"✓ Extracted {len(df)} chunks with 8 HRV features")
 
-        # ---- per-duration outputs ----
         if len(feature_list) >= 2:
             print(f"📈 Generating correlation matrix heatmap for {len(feature_list)} features...")
             corr_features = [f for f in feature_list if f in df.columns]
@@ -1016,7 +938,7 @@ def run_correlation_analysis(args):
                 df_clean = df.dropna(subset=valid_features, how='all').copy()
                 if not df_clean.empty:
                     print(f"📈 Generating feature distribution plots for {len(valid_features)} features...")
-                    df_clean['label'] = df_clean['label'].apply(lambda x: 1 if x in [2, 4] else 0)
+                    df_clean['label'] = df_clean['label'].apply(lambda x: label_cfg.map_label(x))
                     fig, axes = viz.plot_features_dist(df_clean, feature_cols=valid_features)
                     dist_path = output_path / f"feature_distributions_{duration}s.png"
                     fig.savefig(dist_path, dpi=150, bbox_inches='tight')
@@ -1027,11 +949,9 @@ def run_correlation_analysis(args):
         df.to_csv(csv_path, index=False)
         print(f"✓ Saved: {csv_path}")
 
-    # ------------------------------------------------------------------
-    # Stage 2: pairwise comparison across durations
-    # ------------------------------------------------------------------
+    # Stage 2: pairwise comparison
     if len(durations) < 2:
-        print("\nℹ️  Only one duration requested — skipping cross-duration comparison.")
+        print("\nℹ️  Only one duration requested \u2014 skipping cross-duration comparison.")
         print("\n✅ Correlation analysis complete!")
         return
 
@@ -1039,7 +959,6 @@ def run_correlation_analysis(args):
     print("CROSS-DURATION COMPARISON (small vs large windows)")
     print("-" * 80)
 
-    # comparison_table[(small, large)][feature] = {'r', 'icc', 'mae', 'n'}
     comparison_table = {}
     rows_for_csv = []
 
@@ -1055,7 +974,6 @@ def run_correlation_analysis(args):
                 continue
 
             print(f"\n🔗 Comparing {small}s vs {large}s (ratio {ratio}:1)...")
-
             comparison_table[(small, large)] = {}
 
             for feat in feature_list:
@@ -1075,7 +993,7 @@ def run_correlation_analysis(args):
                     'mae': metrics['mae'],
                     'n_samples': metrics['n'],
                 })
-                print(f"   • {feat:11s}  R={metrics['r']:.3f}  "
+                print(f"   \u2022 {feat:11s}  R={metrics['r']:.3f}  "
                       f"ICC={metrics['icc']:.3f}  MAE={metrics['mae']:.3f}  "
                       f"n={metrics['n']}")
 
@@ -1084,12 +1002,10 @@ def run_correlation_analysis(args):
         print("\n✅ Correlation analysis complete!")
         return
 
-    # ---- save the long-form CSV ----
     long_csv = output_path / "cross_duration_comparison.csv"
     pd.DataFrame(rows_for_csv).to_csv(long_csv, index=False)
     print(f"\n✓ Saved comparison CSV: {long_csv}")
 
-    # ---- build per-metric NxN tables (rows = small, cols = large) ----
     for metric in ('r', 'icc', 'mae'):
         tbl = _make_pairwise_table(durations, comparison_table, metric)
         tbl_csv = output_path / f"comparison_table_{metric}.csv"
@@ -1098,31 +1014,20 @@ def run_correlation_analysis(args):
         print(f"\n{metric.upper()} comparison (mean across features):")
         print(tbl.to_string())
 
-        # heat-map for the table
-        _plot_pairwise_table(
-            tbl, metric,
-            output_path / f"comparison_{metric}_heatmap.png",
-            f"{metric.upper()} — pairwise duration comparison"
-        )
-        # per-comparison bar chart (one figure, all features, one metric)
-        _plot_per_comparison_bars(
-            comparison_table, metric,
-            output_path / f"comparison_{metric}_bars.png"
-        )
+        _plot_pairwise_table(tbl, metric,
+                             output_path / f"comparison_{metric}_heatmap.png",
+                             f"{metric.upper()} \u2014 pairwise duration comparison")
+        _plot_per_comparison_bars(comparison_table, metric,
+                                  output_path / f"comparison_{metric}_bars.png")
 
-        # per-feature figure for the metric
         features_in_table = sorted({row['feature'] for row in rows_for_csv})
         for feat in features_in_table:
-            _plot_per_feature_bars(
-                rows_for_csv, feat, metric,
-                output_path / f"{feat}_{metric}_comparison.png"
-            )
+            _plot_per_feature_bars(rows_for_csv, feat, metric,
+                                   output_path / f"{feat}_{metric}_comparison.png")
 
-    # ---- styled NxN summary table images (ICC / R / MAE) ----
     print("\n📋 Generating styled summary table images...")
     _plot_metric_summary_tables(durations, comparison_table, feature_list, output_path)
 
-    # ---- feature metric bar charts (sorted descending by mean) ----
     print("\n📊 Generating feature metric bar charts for R, ICC, MAE...")
     METRICS_BAR_CONFIG = [
         ('r',   'Pearson r',       -0.1, 1.05, 'feature_r_bars.png'),
@@ -1130,17 +1035,13 @@ def run_correlation_analysis(args):
         ('mae', 'Mean Absolute Error', -0.05, None, 'feature_mae_bars.png'),
     ]
     for metric_key, metric_label, x_min, x_max, filename in METRICS_BAR_CONFIG:
-        _plot_feature_metric_bars(
-            comparison_table, durations, feature_list,
-            metric_key, metric_label, x_min, x_max,
-            output_path, filename
-        )
+        _plot_feature_metric_bars(comparison_table, durations, feature_list,
+                                  metric_key, metric_label, x_min, x_max,
+                                  output_path, filename)
 
-    # ---- combined table (r, ICC, MAE) as a single PNG ----
     print("\n📋 Generating combined table (r, ICC, MAE) for both comparisons...")
     _save_combined_table(comparison_table, durations, feature_list, output_path)
 
-    # ---- Per-condition analysis (stress / non-stress) ----
     if getattr(args, 'by_condition', False):
         print("\n" + "=" * 80)
         print("PER-CONDITION ANALYSIS (stress vs non-stress)")
@@ -1160,10 +1061,7 @@ def run_correlation_analysis(args):
 
 
 def _filter_features_by_condition(per_subject_features, per_subject_labels, condition_labels):
-    """
-    Filter per-subject feature/label lists to keep only chunks whose label
-    is in condition_labels.
-    """
+    """Filter per-subject feature/label lists to keep only chunks whose label is in condition_labels."""
     filtered_features = []
     filtered_labels = []
     for subj_feats, subj_labels in zip(per_subject_features, per_subject_labels):
@@ -1181,12 +1079,7 @@ def _filter_features_by_condition(per_subject_features, per_subject_labels, cond
 def _run_condition_correlation(per_duration_features, per_duration_labels,
                                 durations, feature_list, corr_analyzer,
                                 condition_name, condition_labels, output_root):
-    """
-    Run the full per-condition correlation pipeline (pairwise comparison,
-    summary tables, bar charts) for a single condition (e.g. 'stress' or
-    'non_stress').
-    Results are saved to output_root / condition_name /  sub-directory.
-    """
+    """Run the full per-condition correlation pipeline for a single condition."""
     cond_path = Path(str(output_root)) / condition_name
     cond_path.mkdir(parents=True, exist_ok=True)
 
@@ -1195,7 +1088,6 @@ def _run_condition_correlation(per_duration_features, per_duration_labels,
           f"(labels {sorted(condition_labels)})")
     print(f"{'=' * 60}")
 
-    # Filter features for this condition
     cond_feats = {}
     cond_lbls  = {}
     for d in durations:
@@ -1210,7 +1102,6 @@ def _run_condition_correlation(per_duration_features, per_duration_labels,
     if len(durations) < 2:
         return
 
-    # Build pairwise comparison table
     comp_table = {}
     for i, small in enumerate(durations):
         for j, large in enumerate(durations):
@@ -1219,7 +1110,6 @@ def _run_condition_correlation(per_duration_features, per_duration_labels,
             ratio = large // small
             if large % small != 0:
                 continue
-
             comp_table[(small, large)] = {}
             for feat in feature_list:
                 s_arr, l_arr = _build_pairwise_arrays(
@@ -1228,63 +1118,51 @@ def _run_condition_correlation(per_duration_features, per_duration_labels,
                 metrics = _compute_comparison_metrics(s_arr, l_arr, corr_analyzer)
                 comp_table[(small, large)][feat] = metrics
 
-    # Save per-metric NxN tables + heatmaps
     for metric in ('r', 'icc', 'mae'):
         tbl = _make_pairwise_table(durations, comp_table, metric)
         tbl.to_csv(cond_path / f"comparison_table_{metric}.csv")
         _plot_pairwise_table(tbl, metric,
                              cond_path / f"comparison_{metric}_heatmap.png",
-                             f"{metric.upper()} — {condition_name}")
+                             f"{metric.upper()} \u2014 {condition_name}")
         _plot_per_comparison_bars(comp_table, metric,
                                   cond_path / f"comparison_{metric}_bars.png")
 
-    # Styled summary table images
     _plot_metric_summary_tables(durations, comp_table, feature_list, cond_path)
 
-    # Feature metric bar charts (sorted by mean)
     METRICS_CFG = [
         ('r',   'Pearson r',       -0.1, 1.05, 'feature_r_bars.png'),
         ('icc', 'ICC (2,1)',       -0.1, 1.05, 'feature_icc_bars.png'),
         ('mae', 'Mean Absolute Error', -0.05, None, 'feature_mae_bars.png'),
     ]
     for metric_key, metric_label, x_min, x_max, filename in METRICS_CFG:
-        _plot_feature_metric_bars(
-            comp_table, durations, feature_list,
-            metric_key, metric_label, x_min, x_max,
-            cond_path, filename
-        )
+        _plot_feature_metric_bars(comp_table, durations, feature_list,
+                                  metric_key, metric_label, x_min, x_max,
+                                  cond_path, filename)
 
-    # Combined table (r, ICC, MAE) as one PNG
     _save_combined_table(comp_table, durations, feature_list, cond_path)
+    print(f"   ✓ Saved {condition_name} results \u2192 {cond_path}")
 
-    print(f"   ✓ Saved {condition_name} results → {cond_path}")
 
+# ══════════════════════════════════════════════════════════════════════════
+# FULL SIGNAL VISUALIZATION
+# ══════════════════════════════════════════════════════════════════════════
 
 def run_full_signal_visualization(args):
-    """
-    Execute full ECG signal visualization with adjustable chunk size.
-    
-    Parameters:
-        args: parsed arguments containing points per chunk and output settings
-    """
+    """Execute full ECG signal visualization with adjustable chunk size."""
     print("\n" + "="*80)
     print("FULL ECG SIGNAL VISUALIZATION")
     print("="*80)
     
-    # Set default output directory if not specified
     output_dir = args.output or '../results/signal_plots'
     
-    # Initialize components
     data_loader = Data(fs=700)
     viz = Visualization()
     
-    # Get dataset path
     dataset_path = _get_dataset_path(args)
     
     print(f"📂 Loading dataset from: {dataset_path}")
     print(f"📊 Chunk size: {args.points} points per plot")
     
-    # Load data
     try:
         ecgs, labels = data_loader.read_dataset(str(dataset_path))
         print(f"✓ Loaded {len(ecgs)} subjects")
@@ -1292,17 +1170,14 @@ def run_full_signal_visualization(args):
         print(f"❌ Error loading dataset: {e}")
         return
     
-    # Create output directory
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
-    # Determine which subject(s) to plot
+    
     if args.subjects:
-        # User-specified subjects
         subjects = args.subjects
         print(f"\U0001f3af Using specified subject(s): {subjects}")
     else:
-        # Pick one random subject
         subjects = [random.randint(0, len(ecgs) - 1)]
         print(f"\U0001f3b2 No subject specified \u2014 randomly selected Subject {subjects[0]}")
     
@@ -1318,25 +1193,18 @@ def run_full_signal_visualization(args):
         print(f"\n\U0001f4cc Processing Subject {idx} ({len(ecg)} samples = {total_chunks} chunks)\n")
         
         try:
-            # Generate ALL chunks (no cap) for the full signal
             print(f"\U0001f4ca Generating all {total_chunks} plots for full signal...")
             figs = viz.plot_ecg_rolling(
-                ecg=ecg,
-                fs=700,
-                chunk_size=args.points,
-                max_chunks=None,  # No cap — plot the ENTIRE signal
-                label=label,
+                ecg=ecg, fs=700, chunk_size=args.points,
+                max_chunks=None, label=label,
                 title=f"Subject {idx} - Full ECG Signal ({len(ecg)} samples)"
             )
-            # Save each figure
             for fig_idx, fig in enumerate(figs):
                 plot_path = output_path / f"subject_{idx:02d}_ecg_chunk_{fig_idx:04d}.png"
                 fig.savefig(plot_path, dpi=100, bbox_inches='tight')
                 plt.close(fig)
-                
                 if (fig_idx + 1) % 10 == 0:
                     print(f"  Saved {fig_idx + 1}/{len(figs)} plots...")
-            
             print(f"✓ Saved {len(figs)} plots for subject {idx}")
         except Exception as e:
             print(f"❌ Error processing subject {idx}: {e}")
@@ -1354,31 +1222,34 @@ def _get_available_models(available_models):
     return result
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# MACHINE LEARNING TRAINING
+# ══════════════════════════════════════════════════════════════════════════
+
 def run_ml_training(args):
     """
-    Execute machine learning model training with cross-validation.
+    Execute ML model training with cross-validation.
     
-    Parameters:
-        args: parsed arguments containing models, datasets, and CV settings
+    Uses the label scheme from --labels (binary or 3class) for both the
+    training labels and the metadata saved alongside each model.
     """
     print("\n" + "="*80)
     print("MACHINE LEARNING MODEL TRAINING")
     print("="*80)
     
-    # Set default output directory if not specified
+    # Label configuration
+    label_cfg = _get_label_config(args)
+    print(f"📋 Label mode: {args.labels} \u2013 {label_cfg.description}")
+    
     output_dir = args.output or '../results/ml_results'
     
-    # Initialize components
     data_loader = Data(fs=700)
     feature_extractor = Features(fs=700)
     ml_evaluator = ML(random_state=42)
     
-    # Get dataset path
     dataset_path = _get_dataset_path(args)
-    
     print(f"📂 Loading dataset from: {dataset_path}")
     
-    # Load data
     try:
         ecgs, labels = data_loader.read_dataset(str(dataset_path))
         print(f"✓ Loaded {len(ecgs)} subjects")
@@ -1386,7 +1257,6 @@ def run_ml_training(args):
         print(f"❌ Error loading dataset: {e}")
         return
     
-    # Validate and normalize model names
     available_models = [
         'knn', 'svm', 'decision_tree', 'random_forest', 
         'gradient_boosting', 'logistic_regression', 'xgboost'
@@ -1407,52 +1277,45 @@ def run_ml_training(args):
         return
     
     if not XGBOOST_AVAILABLE and 'xgboost' in requested_models:
-        print("⚠️  xgboost not installed — skipping XGBoost model")
+        print("⚠️  xgboost not installed \u2014 skipping XGBoost model")
     
     print(f"🤖 Models to train: {', '.join(models_to_train)}")
     
-    # Create output directory
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
     
-    # Create model saving directory
     model_dir = output_path / 'saved_models'
     model_dir.mkdir(parents=True, exist_ok=True)
     print(f"📁 Model save directory: {model_dir}")
     
-    # Process each dataset duration
     print(f"📊 Cross-validation folds: {args.cross_val}")
     
     for duration in args.dataset:
         print(f"\n⏱️  Processing {duration}s chunks...")
         
-        chunk_size = duration * 700  # 700 Hz sampling rate
+        chunk_size = duration * 700
         all_chunks = []
         all_labels = []
         all_subject_ids = []
         
-        # Extract features for all chunks, tracking subject IDs
         for subj_id, (ecg, label) in enumerate(zip(ecgs, labels)):
-            # Filter for labels 1, 2, 3, 4
-            valid_mask = np.isin(label, [1, 2, 3, 4])
+            valid_mask = np.isin(label, label_cfg.VALID_LABELS)
             valid_ecg = ecg[valid_mask]
             valid_label = label[valid_mask]
             
-            # Chunk the signal
             for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
                 chunk = valid_ecg[i:i + chunk_size]
                 chunk_label = valid_label[i]
                 
                 all_chunks.append(chunk)
-                # Binary classification: {1,3}->0 (No Stress), {2,4}->1 (Stress)
-                binary_label = 1 if chunk_label in [2, 4] else 0
-                all_labels.append(binary_label)
+                # Map raw label → target label
+                target_label = label_cfg.map_label(int(chunk_label))
+                all_labels.append(target_label)
                 all_subject_ids.append(subj_id)
         
         print(f"✓ Created {len(all_chunks)} chunks")
         
-        # Extract HRV features from chunks
         feature_list = []
         for chunk in all_chunks:
             try:
@@ -1471,18 +1334,15 @@ def run_ml_training(args):
             except:
                 feature_list.append([np.nan] * 8)
         
-        # Create DataFrame with features, labels, and subject IDs
         feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
         df = pd.DataFrame(feature_list, columns=feature_names)
         df['label'] = all_labels
         df['subject_id'] = all_subject_ids
         
-        # Handle NaN values - impute with column medians (fallback to 0)
         n_before = len(df)
         nan_count = df[feature_names].isna().sum().sum()
         if nan_count > 0:
             fill_values = df[feature_names].median()
-            # If any column median is NaN (entirely NaN column), use 0 instead
             fill_values = fill_values.fillna(0)
             df[feature_names] = df[feature_names].fillna(fill_values)
             print(f"⚠️  Imputed {nan_count} NaN values with feature medians")
@@ -1492,20 +1352,21 @@ def run_ml_training(args):
         y = df['label'].values
         
         print(f"✓ Feature matrix: {X.shape[0]} samples × {X.shape[1]} features")
-        print(f"✓ Class distribution: {np.sum(y==0)} no-stress, {np.sum(y==1)} stress")
+        # Show class distribution with human-readable names
+        class_counts = pd.Series(y).value_counts().sort_index()
+        dist_str = ', '.join([f"{label_cfg.target_name(int(k))}: {v}" for k, v in class_counts.items()])
+        print(f"✓ Class distribution: {dist_str}")
         
-        # Train each model
         print(f"🚀 Training {len(models_to_train)} models with {args.cross_val}-fold cross-validation...")
 
         all_results = {}
         for model_name in models_to_train:
             model = _get_model(model_name)
             if model is None:
-                print(f"   → {model_name.upper()}... ⚠️ skipped (not available)")
+                print(f"   \u2192 {model_name.upper()}... ⚠️ skipped (not available)")
                 continue
 
             try:
-                # Use the ML class for evaluation (only for CV metrics)
                 models_dict = {model_name: model}
                 results = ml_evaluator.eval_all(
                     df, models_dict, feature_names,
@@ -1515,44 +1376,45 @@ def run_ml_training(args):
                 all_results[model_name] = results[model_name]
                 overall = results[model_name]['overall']
 
-                # Refit the model on the FULL dataset so the saved file is
-                # usable for inference on new data (e.g. PAVIA). CV above
-                # only fits per-fold clones which are then discarded.
                 try:
                     from sklearn.base import clone as _clone
                     final_model = _clone(model)
                     final_model.fit(X, y)
                 except Exception as fit_err:
-                    print(f"   → {model_name.upper()}... "
+                    print(f"   \u2192 {model_name.upper()}... "
                           f"⚠️ Could not refit on full data: {fit_err}. "
                           f"Saving unfitted model (prediction will fail).")
                     final_model = model
 
-                # Save the trained model + a small metadata sidecar so
-                # downstream scripts (e.g. on PAVIA) know the expected
-                # feature order and label mapping.
                 model_path = model_dir / f"{model_name}_{duration}s.pkl"
                 joblib.dump(final_model, model_path)
+
+                # Build human-readable label mapping for metadata
+                meta_label_mapping = {k: label_cfg.target_name(int(k))
+                                      for k in sorted(set(y))}
 
                 meta_path = model_dir / f"{model_name}_{duration}s.meta.pkl"
                 joblib.dump({
                     'feature_names': feature_names,
                     'duration': duration,
-                    'label_mapping': {0: 'no_stress', 1: 'stress'},
-                    'label_source': 'wesad_binary (1,3)->0 ; (2,4)->1',
+                    'label_mapping': meta_label_mapping,
+                    'label_source': label_cfg.label_source,
+                    'label_mode': args.labels,
                     'trained_on': 'wesad',
                 }, meta_path)
 
-                print(f"   → {model_name.upper()}... "
+                f1_info = ""
+                if label_cfg.N_CLASSES > 2:
+                    f1_info = f" (macro)"
+                print(f"   \u2192 {model_name.upper()}... "
                       f"Accuracy: {overall['accuracy_mean']:.4f} "
                       f"(±{overall['accuracy_std']:.4f}), "
                       f"F1: {overall['f1_mean']:.4f} "
-                      f"(±{overall['f1_std']:.4f}) "
+                      f"(±{overall['f1_std']:.4f}){f1_info} "
                       f"✓ Saved: {model_path}")
             except Exception as e:
-                print(f"   → {model_name.upper()}... ❌ Error: {e}")
+                print(f"   \u2192 {model_name.upper()}... ❌ Error: {e}")
         
-        # ── Save results for this duration ────────────────────────────────────
         if all_results:
             summary_rows = []
             for model_name, result in all_results.items():
@@ -1571,19 +1433,13 @@ def run_ml_training(args):
 
             summary_df = pd.DataFrame(summary_rows).set_index('model')
 
-            # ── 1. CSV summary ────────────────────────────────────────────────
             summary_path = output_path / f"ml_results_{duration}s.csv"
             summary_df.to_csv(summary_path)
             print(f"✓ Saved results CSV: {summary_path}")
 
-            # ── 2. Model-comparison bar chart (accuracy + F1 side-by-side) ───
             _plot_model_comparison(summary_df, duration, output_path)
-
-            # ── 3. Results table image ────────────────────────────────────────
             _plot_results_table(summary_df, duration, output_path)
-
-            # ── 4. Individual confusion matrix per model ──────────────────────
-            _plot_confusion_matrices_grid(all_results, duration, output_path)
+            _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg)
 
         print(f"✓ {duration}s dataset processing complete")
 
@@ -1593,11 +1449,7 @@ def run_ml_training(args):
 # ── ML output helpers ─────────────────────────────────────────────────────────
 
 def _plot_model_comparison(summary_df, duration, output_path):
-    """
-    Grouped bar chart comparing Accuracy and F1 across all models for one
-    chunk duration.  Error bars show ±1 std from cross-validation.
-    Saved as  ml_model_comparison_{duration}s.png
-    """
+    """Grouped bar chart comparing Accuracy and F1 across all models."""
     models  = summary_df.index.tolist()
     x       = np.arange(len(models))
     width   = 0.35
@@ -1628,7 +1480,7 @@ def _plot_model_comparison(summary_df, duration, output_path):
     ax.set_ylim(0, 1.12)
     ax.set_ylabel('Score', fontsize=12)
     ax.set_xlabel('Model', fontsize=12)
-    ax.set_title(f'Model Comparison – {duration}s Chunks\n(mean ± std over CV folds)',
+    ax.set_title(f'Model Comparison \u2013 {duration}s Chunks\n(mean ± std over CV folds)',
                  fontsize=13, fontweight='bold')
     ax.legend(fontsize=10)
     ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5, label='Chance')
@@ -1642,11 +1494,7 @@ def _plot_model_comparison(summary_df, duration, output_path):
 
 
 def _plot_results_table(summary_df, duration, output_path):
-    """
-    Render the results summary as a styled table image.
-    Cells are colour-coded by value (green = high, red = low).
-    Saved as  ml_results_table_{duration}s.png
-    """
+    """Render the results summary as a styled table image."""
     display_cols = ['accuracy_mean', 'accuracy_std',
                     'f1_mean', 'f1_std',
                     'precision_mean', 'precision_std',
@@ -1665,16 +1513,15 @@ def _plot_results_table(summary_df, duration, output_path):
     fig, ax = plt.subplots(figsize=(n_cols * 1.35, fig_h))
     ax.axis('off')
 
-    # build cell colours: only colour mean columns (even indices), grey for std
     cell_colors = []
     cmap = plt.cm.RdYlGn
     for r in range(n_rows):
         row_colors = []
         for c in range(n_cols):
-            if c % 2 == 0:                        # mean column → colour map
+            if c % 2 == 0:
                 val = data[r, c]
                 rgba = cmap(val) if not np.isnan(val) else (0.9, 0.9, 0.9, 1)
-            else:                                 # std column → light grey
+            else:
                 rgba = (0.96, 0.96, 0.96, 1)
             row_colors.append(rgba)
         cell_colors.append(row_colors)
@@ -1691,7 +1538,7 @@ def _plot_results_table(summary_df, duration, output_path):
     table.set_fontsize(9)
     table.scale(1, 1.55)
 
-    ax.set_title(f'ML Results Summary – {duration}s Chunks\n'
+    ax.set_title(f'ML Results Summary \u2013 {duration}s Chunks\n'
                  f'(green = high performance)',
                  fontsize=12, fontweight='bold', pad=12)
 
@@ -1702,18 +1549,19 @@ def _plot_results_table(summary_df, duration, output_path):
     print(f"✓ Saved results table: {save_path}")
 
 
-def _plot_confusion_matrices_grid(all_results, duration, output_path):
+def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=None):
     """
     One subplot per model, arranged in a grid.
     Each subplot is a confusion matrix for the aggregated CV predictions.
-    Saved as  ml_confusion_matrices_{duration}s.png
 
-    Also saves individual per-model PNGs as
-    ml_cm_{model}_{duration}s.png  for easy inclusion in reports.
+    Class names are taken from label_cfg if provided (for 3class support).
     """
-    CLASS_NAMES = ['Non-Stress', 'Stress']
-    models      = list(all_results.keys())
-    n           = len(models)
+    if label_cfg is not None:
+        CLASS_NAMES = label_cfg.CLASS_NAMES
+    else:
+        CLASS_NAMES = ['Non-Stress', 'Stress']
+    models = list(all_results.keys())
+    n = len(models)
     if n == 0:
         return
 
@@ -1721,7 +1569,6 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path):
     nrows = (n + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols,
                              figsize=(ncols * 4.5, nrows * 4.2))
-    # flatten axes always into 1-D list
     if n == 1:
         axes = [axes]
     elif nrows == 1:
@@ -1753,7 +1600,6 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path):
             fontsize=10, fontweight='bold'
         )
 
-        # ── also save standalone individual CM ──────────────────────────────
         fig_ind, ax_ind = plt.subplots(figsize=(4.5, 4.0))
         ConfusionMatrixDisplay.from_predictions(
             y_true, y_pred,
@@ -1763,7 +1609,7 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path):
             ax=ax_ind,
         )
         ax_ind.set_title(
-            f'{model_name.replace("_", " ").title()} – {duration}s\n'
+            f'{model_name.replace("_", " ").title()} \u2013 {duration}s\n'
             f'Acc={overall["accuracy_mean"]:.3f}  F1={overall["f1_mean"]:.3f}',
             fontsize=10, fontweight='bold'
         )
@@ -1772,11 +1618,10 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path):
         fig_ind.savefig(ind_path, dpi=150, bbox_inches='tight')
         plt.close(fig_ind)
 
-    # hide any unused subplots in the grid
     for ax in axes[n:]:
         ax.set_visible(False)
 
-    fig.suptitle(f'Confusion Matrices – {duration}s Chunks',
+    fig.suptitle(f'Confusion Matrices \u2013 {duration}s Chunks',
                  fontsize=14, fontweight='bold', y=1.01)
     fig.tight_layout()
     grid_path = output_path / f"ml_confusion_matrices_{duration}s.png"
@@ -1786,39 +1631,33 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path):
     print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s.png")
 
 
-# ── FFT Analysis ──────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# FFT ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════
 
 def run_fft_analysis(args):
     """
     FFT frequency analysis with cosine-similarity comparison.
 
-    For each chunk duration (-d, default 30/120/300 s):
+    For each chunk duration:
       1. Chunks all subjects into non-overlapping windows.
-      2. Computes FFT per chunk (via Features.compute_fft).
-      3. Plots mean spectrum ± std for stress vs. non-stress.
+      2. Computes FFT per chunk.
+      3. Plots mean spectrum ± std per class.
       4. Overlays all durations on one figure per class.
-      5. Computes cosine similarity for three pair types:
-           • Stress  ↔  Non-stress   (cross-class)
-           • Stress  ↔  Stress       (within-stress)
-           • Non-stress ↔ Non-stress (within non-stress)
+      5. Computes cosine similarity for pair types (cross-class, within-class).
       6. Saves KDE distribution plots and a grouped summary bar chart.
 
-    Label mapping used (binary):
-        1 (Baseline)   → 0  Non-Stress
-        2 (Stress)     → 1  Stress
-        3 (Amusement)  → 0  Non-Stress
-        4 (Meditation) → 1  Stress
+    Label scheme is controlled via --labels (binary or 3class).
     """
     print("\n" + "=" * 80)
     print("FFT FREQUENCY ANALYSIS")
     print("=" * 80)
 
-    # ── config ────────────────────────────────────────────────────────────────
+    # Label configuration
+    label_cfg = _get_label_config(args)
+    print(f"📋 Label mode: {args.labels} \u2013 {label_cfg.description}")
+
     FS          = 700
-    VALID_LABELS = [1, 2, 3, 4]
-    LABEL_MAP    = {1: 0, 2: 1, 3: 0, 4: 1}
-    LABEL_NAME   = {0: 'Non-Stress', 1: 'Stress'}
-    COLORS       = {0: '#2196F3', 1: '#F44336'}     # blue / red
     FREQ_MAX     = args.fft_freq_max
     MAX_PAIRS    = args.fft_max_pairs
     durations    = sorted(set(args.dataset))
@@ -1831,7 +1670,6 @@ def run_fft_analysis(args):
     print(f"🔢 Max cosine pairs : {MAX_PAIRS}")
     print(f"📡 Freq limit       : {FREQ_MAX} Hz")
 
-    # ── load data ─────────────────────────────────────────────────────────────
     data_loader       = Data(fs=FS)
     feature_extractor = Features(fs=FS)
     dataset_path      = _get_dataset_path(args)
@@ -1844,45 +1682,47 @@ def run_fft_analysis(args):
         print(f"❌ Error loading dataset: {e}")
         return
 
-    # ── helper: spectrum interpolation ────────────────────────────────────────
     def interp_spectrum(freqs, mag, common_freqs):
         return np.interp(common_freqs, freqs, mag, left=0.0, right=0.0)
 
-    # ── step 1: chunk + FFT ───────────────────────────────────────────────────
-    results = {}   # results[duration] = {'freqs': ..., 'spectra': {0:[…], 1:[…]}}
+    # Step 1: chunk + FFT
+    n_classes = label_cfg.N_CLASSES
+    results = {}  # results[duration] = {'freqs': ..., 'spectra': {target: [...]}}
 
     for duration in durations:
         chunk_size    = duration * FS
         common_freqs  = np.fft.rfftfreq(chunk_size, d=1.0 / FS)
         freq_mask     = common_freqs <= FREQ_MAX
         common_freqs  = common_freqs[freq_mask]
-        spectra       = {0: [], 1: []}
-        n_chunks      = {0: 0, 1: 0}
+        spectra       = {c: [] for c in range(n_classes)}
+        n_chunks      = {c: 0 for c in range(n_classes)}
 
-        print(f"\n⚙️  Computing FFT – {duration}s chunks...")
+        print(f"\n⚙️  Computing FFT \u2013 {duration}s chunks...")
         for ecg, label in zip(ecgs, labels):
-            valid_mask  = np.isin(label, VALID_LABELS)
+            valid_mask  = np.isin(label, label_cfg.VALID_LABELS)
             valid_ecg   = ecg[valid_mask]
             valid_label = label[valid_mask]
 
             for start in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
                 chunk     = valid_ecg[start: start + chunk_size]
                 raw_lbl   = int(valid_label[start])
-                bin_lbl   = LABEL_MAP[raw_lbl]
+                target_lbl = label_cfg.map_label(raw_lbl)
                 try:
                     f, m = feature_extractor.compute_fft(chunk)
                     if f.size == 0:
                         continue
-                    spectra[bin_lbl].append(interp_spectrum(f, m, common_freqs))
-                    n_chunks[bin_lbl] += 1
+                    spectra[target_lbl].append(interp_spectrum(f, m, common_freqs))
+                    n_chunks[target_lbl] += 1
                 except Exception:
                     pass
 
         results[duration] = {'freqs': common_freqs, 'spectra': spectra}
-        total = n_chunks[0] + n_chunks[1]
-        print(f"   ✓ {total} chunks  (non-stress: {n_chunks[0]}, stress: {n_chunks[1]})")
+        total = sum(n_chunks.values())
+        counts_str = ', '.join([f"{label_cfg.target_name(c)}: {n_chunks[c]}"
+                                for c in range(n_classes)])
+        print(f"   ✓ {total} chunks  ({counts_str})")
 
-    # ── step 2: stacked mean-spectrum figure (one panel per duration) ─────────
+    # Step 2: stacked mean-spectrum figure (one panel per duration)
     print("\n📊 Plotting mean FFT spectra...")
     fig, axes = plt.subplots(len(durations), 1,
                              figsize=(14, 4.5 * len(durations)), sharex=False)
@@ -1893,28 +1733,30 @@ def run_fft_analysis(args):
         res     = results[duration]
         freqs   = res['freqs']
         spectra = res['spectra']
-        for bin_lbl, lname in LABEL_NAME.items():
-            mags = spectra[bin_lbl]
+        for target_lbl in range(n_classes):
+            mags = spectra[target_lbl]
             if not mags:
                 continue
             arr  = np.stack(mags)
             mean = arr.mean(axis=0)
             std  = arr.std(axis=0)
-            ax.plot(freqs, mean, color=COLORS[bin_lbl], lw=1.8, label=lname)
+            color = label_cfg.COLORS.get(target_lbl, '#333333')
+            lname = label_cfg.target_name(target_lbl)
+            ax.plot(freqs, mean, color=color, lw=1.8, label=lname)
             ax.fill_between(freqs, mean - std, mean + std,
-                            color=COLORS[bin_lbl], alpha=0.18)
-        ax.axvspan(0.04, 0.15, color='gold',   alpha=0.12, label='LF (0.04–0.15 Hz)')
-        ax.axvspan(0.15, 0.40, color='orchid', alpha=0.12, label='HF (0.15–0.40 Hz)')
+                            color=color, alpha=0.18)
+        ax.axvspan(0.04, 0.15, color='gold',   alpha=0.12, label='LF (0.04\u20130.15 Hz)')
+        ax.axvspan(0.15, 0.40, color='orchid', alpha=0.12, label='HF (0.15\u20130.40 Hz)')
         ax.set_xlim(0, FREQ_MAX)
         ax.set_xlabel('Frequency (Hz)', fontsize=11)
         ax.set_ylabel('Magnitude',      fontsize=11)
-        ns, ss = len(spectra[0]), len(spectra[1])
-        ax.set_title(f'Mean FFT – {duration}s  (non-stress n={ns}, stress n={ss})',
-                     fontsize=12)
+        counts_str = ', '.join([f"{label_cfg.target_name(c)}: {len(spectra[c])}"
+                                for c in range(n_classes)])
+        ax.set_title(f'Mean FFT \u2013 {duration}s  ({counts_str})', fontsize=12)
         ax.legend(fontsize=9)
         ax.grid(True, ls='--', alpha=0.4)
 
-    fig.suptitle('ECG FFT: Stress vs. Non-Stress across Chunk Durations',
+    fig.suptitle(f'ECG FFT by Class across Chunk Durations',
                  fontsize=14, fontweight='bold', y=1.01)
     fig.tight_layout()
     p = output_path / 'fft_spectra_all_durations.png'
@@ -1922,15 +1764,17 @@ def run_fft_analysis(args):
     plt.close(fig)
     print(f"   ✓ Saved: {p}")
 
-    # ── step 3: overlay plot – all durations on same axes ────────────────────
+    # Step 3: overlay plot – all durations on same axes (one panel per class)
     dur_colors  = {d: c for d, c in zip(durations, ['#1565C0', '#2E7D32', '#6A1B9A',
                                                      '#E65100', '#4A148C'])}
     dur_ls      = {d: ls for d, ls in zip(durations, ['-', '--', ':', '-.', (0, (3, 1, 1, 1))])}
-    fig, axes2  = plt.subplots(1, 2, figsize=(16, 5))
-    for bin_lbl, lname in LABEL_NAME.items():
-        ax = axes2[bin_lbl]
+    fig, axes2  = plt.subplots(1, n_classes, figsize=(6 * n_classes + 2, 5))
+    if n_classes == 1:
+        axes2 = [axes2]
+    for target_lbl in range(n_classes):
+        ax = axes2[target_lbl]
         for dur in durations:
-            mags = results[dur]['spectra'][bin_lbl]
+            mags = results[dur]['spectra'][target_lbl]
             if not mags:
                 continue
             arr  = np.stack(mags)
@@ -1944,10 +1788,11 @@ def run_fft_analysis(args):
         ax.set_xlim(0, FREQ_MAX)
         ax.set_xlabel('Frequency (Hz)', fontsize=11)
         ax.set_ylabel('Magnitude',      fontsize=11)
-        ax.set_title(f'{lname} – all chunk sizes', fontsize=12)
+        ax.set_title(f'{label_cfg.target_name(target_lbl)} \u2013 all chunk sizes',
+                     fontsize=12)
         ax.legend(fontsize=9)
         ax.grid(True, ls='--', alpha=0.4)
-    fig.suptitle('FFT Overlay – Effect of Chunk Duration',
+    fig.suptitle('FFT Overlay \u2013 Effect of Chunk Duration',
                  fontsize=13, fontweight='bold')
     fig.tight_layout()
     p = output_path / 'fft_overlay_durations.png'
@@ -1955,13 +1800,25 @@ def run_fft_analysis(args):
     plt.close(fig)
     print(f"   ✓ Saved: {p}")
 
-    # ── step 4: cosine similarity ─────────────────────────────────────────────
+    # Step 4: cosine similarity
     print("\n📐 Computing cosine similarities...")
     random.seed(42)
     np.random.seed(42)
 
-    COMP_NAMES   = ['Stress ↔ Non-stress', 'Stress ↔ Stress', 'Non-stress ↔ Non-stress']
-    COMP_COLORS  = ['#E53935',             '#1E88E5',          '#43A047']
+    # Build comparison names dynamically from class labels
+    COMP_NAMES  = []
+    COMP_COLORS = []
+    class_list = list(range(n_classes))
+    # Cross-class pairs: class_i ↔ class_j where i < j
+    for i in class_list:
+        for j in class_list:
+            if i < j:
+                COMP_NAMES.append(f'{label_cfg.target_name(i)} ↔ {label_cfg.target_name(j)}')
+                COMP_COLORS.append(label_cfg.COLORS.get(i, '#333') if i != j else label_cfg.COLORS.get(i, '#333'))
+    # Within-class pairs
+    for c in class_list:
+        COMP_NAMES.append(f'{label_cfg.target_name(c)} ↔ {label_cfg.target_name(c)}')
+        COMP_COLORS.append(label_cfg.COLORS.get(c, '#333'))
 
     def _cos_sim(a, b):
         na, nb = np.linalg.norm(a), np.linalg.norm(b)
@@ -1984,28 +1841,40 @@ def run_fft_analysis(args):
 
     cos_results = {}
     for duration in durations:
-        spec_ns = results[duration]['spectra'][0]
-        spec_s  = results[duration]['spectra'][1]
-        cross     = _sample_pairs(spec_s,  spec_ns, MAX_PAIRS, same=False)
-        within_s  = _sample_pairs(spec_s,  spec_s,  MAX_PAIRS, same=True)
-        within_ns = _sample_pairs(spec_ns, spec_ns, MAX_PAIRS, same=True)
-        cos_results[duration] = {
-            'Stress ↔ Non-stress'    : cross,
-            'Stress ↔ Stress'        : within_s,
-            'Non-stress ↔ Non-stress': within_ns,
-        }
+        cos_results[duration] = {}
+        # cross-class pairs
+        idx = 0
+        for i in class_list:
+            for j in class_list:
+                if i < j:
+                    cross = _sample_pairs(results[duration]['spectra'][i],
+                                          results[duration]['spectra'][j],
+                                          MAX_PAIRS, same=False)
+                    cos_results[duration][COMP_NAMES[idx]] = cross
+                    idx += 1
+        # within-class pairs
+        for c in class_list:
+            within = _sample_pairs(results[duration]['spectra'][c],
+                                   results[duration]['spectra'][c],
+                                   MAX_PAIRS, same=True)
+            cos_results[duration][COMP_NAMES[idx]] = within
+            idx += 1
+
         print(f"\n   {duration}s chunks:")
         for cname, vals in cos_results[duration].items():
             if vals:
-                print(f"     {cname:<30s} mean={np.mean(vals):.4f}  "
+                print(f"     {cname:<40s} mean={np.mean(vals):.4f}  "
                       f"std={np.std(vals):.4f}  n={len(vals)}")
 
-    # ── step 5: KDE distribution grid ────────────────────────────────────────
+    # Step 5: KDE distribution grid
     print("\n📊 Plotting cosine similarity distributions...")
-    fig, axes = plt.subplots(len(durations), len(COMP_NAMES),
-                             figsize=(18, 4 * len(durations)))
+    n_comp = len(COMP_NAMES)
+    fig, axes = plt.subplots(len(durations), n_comp,
+                             figsize=(5 * n_comp + 2, 4 * len(durations)))
     if len(durations) == 1:
         axes = [axes]
+    if n_comp == 1:
+        axes = [[axes[0]]] if len(durations) == 1 else [[ax] for ax in axes]
 
     for row, duration in enumerate(durations):
         ax_row = axes[row] if len(durations) > 1 else axes[0]
@@ -2023,10 +1892,10 @@ def run_fft_analysis(args):
             ax.set_xlim(0, 1)
             ax.set_xlabel('Cosine Similarity', fontsize=10)
             ax.set_ylabel('Density',           fontsize=10)
-            ax.set_title(f'{duration}s – {comp}', fontsize=10)
+            ax.set_title(f'{duration}s \u2013 {comp}', fontsize=10)
             ax.grid(True, ls='--', alpha=0.3)
 
-    fig.suptitle('Cosine Similarity of FFT Spectra – Stress vs. Non-Stress',
+    fig.suptitle('Cosine Similarity of FFT Spectra',
                  fontsize=14, fontweight='bold', y=1.01)
     fig.tight_layout()
     p = output_path / 'fft_cosine_similarity_distributions.png'
@@ -2034,7 +1903,7 @@ def run_fft_analysis(args):
     plt.close(fig)
     print(f"   ✓ Saved: {p}")
 
-    # ── step 6: summary bar chart + CSV ──────────────────────────────────────
+    # Step 6: summary bar chart + CSV
     summary_rows = []
     for duration in durations:
         for comp in COMP_NAMES:
@@ -2053,8 +1922,7 @@ def run_fft_analysis(args):
     print(f"   ✓ Saved CSV: {csv_path}")
 
     x      = np.arange(len(durations))
-    n_comp = len(COMP_NAMES)
-    width  = 0.22
+    width  = 0.8 / max(n_comp, 1)
     fig, ax = plt.subplots(figsize=(max(10, len(durations) * 3.5), 5))
 
     for i, (comp, color) in enumerate(zip(COMP_NAMES, COMP_COLORS)):
@@ -2090,42 +1958,20 @@ def run_fft_analysis(args):
     print(f"   ✓ Saved: {p}")
 
     print("\n✅ FFT analysis complete!")
-    print(f"   All outputs → {output_path.resolve()}")
+    print(f"   All outputs \u2192 {output_path.resolve()}")
 
 
-# ── PREDICTION MODE ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# PREDICTION MODE
+# ══════════════════════════════════════════════════════════════════════════
 
 def _load_pavia_data(data_dir=None, features_path=None, labels_path=None):
     """
     Load and prepare Pavia HRV data for prediction.
-
-    The Pavia CSV uses column names:
-        HR, SDNN, rMSSD, pNN50, SE, LF, HF, LFHF
-    which differ from the standard feature names:
-        mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio
-
-    This function:
-        1. Loads pavia_features.csv and pavia_labels.csv
-        2. Removes all-NaN (empty) rows
-        3. Maps Pavia column names to standard feature names
-        4. Computes mean_rr from HR (mean_rr = 60000 / HR)
-        5. Drops SE (Sample Entropy) which is not in the standard set
-        6. Aligns labels with the filtered feature rows
-
-    Parameters:
-        data_dir: path to the data directory (default: project_root / 'data')
-                  Used only when features_path / labels_path are not provided.
-        features_path: direct path to the features CSV file (overrides data_dir)
-        labels_path:   direct path to the labels CSV file (overrides data_dir)
-
-    Returns:
-        X: np.ndarray of shape (n_samples, 8) with standard feature ordering
-        y: np.ndarray of shape (n_samples,) with binary labels (0/1)
-        feature_names: list of standard feature column names
+    Returns (X, y, feature_names) with binary labels (0/1).
     """
     from pathlib import Path
 
-    # Resolve feature/label paths
     if features_path and labels_path:
         features_path = Path(features_path)
         labels_path   = Path(labels_path)
@@ -2141,50 +1987,42 @@ def _load_pavia_data(data_dir=None, features_path=None, labels_path=None):
         print(f"   ❌ Pavia labels not found: {labels_path}")
         return None, None, None
 
-    # 1. Load raw data
     raw_df  = pd.read_csv(features_path)
     raw_labels = pd.read_csv(labels_path)
     print(f"   ✓ Loaded {features_path.name} - shape {raw_df.shape}")
     print(f"   ✓ Loaded {labels_path.name}   - shape {raw_labels.shape}")
 
-    # 2. Remove all-NaN rows (empty separators in CSV)
     all_nan = raw_df.isna().all(axis=1)
     n_empty = int(all_nan.sum())
     if n_empty > 0:
         print(f"   Removing {n_empty} empty row(s) from features")
         valid_df = raw_df.dropna(how='all').reset_index(drop=True)
-        # Align labels: drop labels at same indices as empty feature rows
         valid_labels = raw_labels.loc[~all_nan].reset_index(drop=True)
     else:
         valid_df = raw_df
         valid_labels = raw_labels
 
-    # 3. Map Pavia column names to standard names
     pavia_to_standard = {
         'HR':    'mean_hr',
         'SDNN':  'sdnn',
         'rMSSD': 'rmssd',
         'pNN50': 'pnn50',
-        'SE':    None,          # Sample Entropy - not in standard features
+        'SE':    None,
         'LF':    'lf_power',
         'HF':    'hf_power',
         'LFHF':  'lf_hf_ratio',
     }
 
-    # Rename columns
     mapped = valid_df.rename(
         columns={k: v for k, v in pavia_to_standard.items() if v is not None}
     )
-    # Drop unmapped columns (e.g. SE)
     cols_to_drop = [c for c in pavia_to_standard if pavia_to_standard[c] is None and c in mapped.columns]
     if cols_to_drop:
         mapped = mapped.drop(columns=cols_to_drop)
 
-    # 4. Compute mean_rr from HR
     if 'mean_hr' in mapped.columns:
         mapped['mean_rr'] = 60000.0 / mapped['mean_hr']
 
-    # 5. Select only the 8 standard features in the correct order
     standard_features = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50',
                          'lf_power', 'hf_power', 'lf_hf_ratio']
     available_features = [f for f in standard_features if f in mapped.columns]
@@ -2195,7 +2033,6 @@ def _load_pavia_data(data_dir=None, features_path=None, labels_path=None):
     X = mapped[available_features].values.astype(np.float64)
     y = valid_labels['label'].values.ravel().astype(int)
 
-    # 6. Handle any remaining NaN values
     nan_count = np.isnan(X).sum()
     if nan_count > 0:
         print(f"   {int(nan_count)} NaN value(s) detected - imputing with column medians")
@@ -2211,38 +2048,33 @@ def _load_pavia_data(data_dir=None, features_path=None, labels_path=None):
     return X, y, standard_features
 
 
-
 def run_prediction(args):
     """
     Load trained models and make predictions on test data.
     
-    This function supports three modes:
-    1. Pavia mode (--pavia): Load Pavia HRV data from CSV with automatic column mapping
-    2. Custom CSV mode (--test-data): Load features from CSV files
-    3. WESAD dataset mode: Load test data from the same WESAD dataset
-    
-    Parameters:
+    Supports three modes:
+    1. Pavia mode (--pavia)
+    2. Custom CSV mode (--test-data)
+    3. WESAD dataset mode
     """
     print("\n" + "=" * 80)
     print("PREDICTION MODE")
     print("=" * 80)
 
-    # Prediction mode defaults to the 30 s trained models, which is the
-    # canonical choice for cross-dataset evaluation (e.g. PAVIA). Pass
-    # `-d 30 120 300` (or any subset) to override.
+    label_cfg = _get_label_config(args)
+    print(f"📋 Label mode: {args.labels} \u2013 {label_cfg.description}")
+
     if args.dataset == [30, 120, 300]:
         durations_to_use = [30]
         print("ℹ️  Defaulting to 30 s models (override with -d).")
     else:
         durations_to_use = args.dataset
 
-    # Set default output directory
     output_dir = args.output or '../results/predictions'
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_path}")
     
-    # Determine which models to use
     available_models = [
         'knn', 'svm', 'decision_tree', 'random_forest', 
         'gradient_boosting', 'logistic_regression', 'xgboost'
@@ -2258,14 +2090,12 @@ def run_prediction(args):
     
     print(f"🤖 Models to use: {', '.join(models_to_use)}")
     
-    # Process each duration
     feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
     all_predictions = {}
 
     for duration in durations_to_use:
         print(f"\n⏱️  Processing {duration}s chunks...")
 
-        # Load the trained models
         models = {}
         model_dir = Path(args.model_dir)
         
@@ -2284,7 +2114,7 @@ def run_prediction(args):
             print(f"   ❌ No models found for {duration}s duration. Skipping...")
             continue
         
-        # ── PAVIA MODE ────────────────────────────────────────────────────────────
+        # ── PAVIA MODE ──
         if args.pavia is not None:
             print("   📋 Using Pavia HRV data for prediction...")
             if args.test_data and args.test_labels:
@@ -2306,7 +2136,7 @@ def run_prediction(args):
             feature_names = loaded_feature_names
             print(f"   ✓ Pavia data ready: {X_test.shape[0]} samples, {X_test.shape[1]} features")
 
-        # ── CUSTOM CSV MODE ────────────────────────────────────────────────────────
+        # ── CUSTOM CSV MODE ──
         elif args.test_data:
             try:
                 test_data = pd.read_csv(args.test_data)
@@ -2316,11 +2146,9 @@ def run_prediction(args):
                     test_labels = test_data['label'].values
                     test_data = test_data.drop('label', axis=1)
                 
-                # Ensure we have the right features
                 available_features = [f for f in feature_names if f in test_data.columns]
                 if len(available_features) != len(feature_names):
                     print(f"   ⚠️  Missing some features. Available: {available_features}")
-                    # Use available features only
                     X_test = test_data[available_features].values
                 else:
                     X_test = test_data[feature_names].values
@@ -2331,10 +2159,9 @@ def run_prediction(args):
                 print(f"   ❌ Error loading test data: {e}")
                 continue
                 
-        # ── WESAD DATASET MODE ─────────────────────────────────────────────────────
+        # ── WESAD DATASET MODE ──
         else:
             try:
-                # Load WESAD data
                 dataset_path = _get_dataset_path(args)
                 data_loader = Data(fs=700)
                 feature_extractor = Features(fs=700)
@@ -2342,18 +2169,14 @@ def run_prediction(args):
                 print(f"   📂 Loading WESAD data from: {dataset_path}")
                 ecgs, labels = data_loader.read_dataset(str(dataset_path))
                 
-                # Use first subject as test (or random split could be implemented)
-                # For simplicity, use subject 0 as test
                 test_subject = 0
                 test_ecg = ecgs[test_subject]
                 test_label = labels[test_subject]
                 
-                # Filter valid labels
-                valid_mask = np.isin(test_label, [1, 2, 3, 4])
+                valid_mask = np.isin(test_label, label_cfg.VALID_LABELS)
                 valid_ecg = test_ecg[valid_mask]
                 valid_label = test_label[valid_mask]
                 
-                # Chunk the test data
                 chunk_size = duration * 700
                 X_test = []
                 y_test = []
@@ -2368,21 +2191,18 @@ def run_prediction(args):
                             features_dict.get(f, np.nan) for f in feature_names
                         ]
                         X_test.append(feature_values)
-                        # Binary classification: {1,3}->0 (No Stress), {2,4}->1 (Stress)
-                        binary_label = 1 if chunk_label in [2, 4] else 0
-                        y_test.append(binary_label)
+                        target_label = label_cfg.map_label(int(chunk_label))
+                        y_test.append(target_label)
                     except:
                         continue
                 
                 X_test = np.array(X_test)
                 y_test = np.array(y_test)
                 
-                # Handle NaN values
                 nan_mask = ~np.isnan(X_test).any(axis=1)
                 X_test = X_test[nan_mask]
                 y_test = y_test[nan_mask]
                 
-                # Impute remaining NaN with column medians
                 for col_idx in range(X_test.shape[1]):
                     col_median = np.nanmedian(X_test[:, col_idx])
                     if np.isnan(col_median):
@@ -2400,7 +2220,6 @@ def run_prediction(args):
             print(f"   ⚠️  No test data available for {duration}s")
             continue
         
-        # Make predictions with each model
         predictions = {}
         y_pred_all = []
         y_true = test_labels if test_labels is not None else None
@@ -2411,13 +2230,12 @@ def run_prediction(args):
                 predictions[model_name] = y_pred
                 y_pred_all.append(y_pred)
                 
-                # Calculate metrics if we have true labels
                 if y_true is not None:
                     acc = accuracy_score(y_true, y_pred)
                     f1 = f1_score(y_true, y_pred, average='weighted')
-                    print(f"   → {model_name.upper()}: Accuracy={acc:.4f}, F1={f1:.4f}")
+                    print(f"   \u2192 {model_name.upper()}: Accuracy={acc:.4f}, F1={f1:.4f}")
                 else:
-                    print(f"   → {model_name.upper()}: Predictions made (no labels for evaluation)")
+                    print(f"   \u2192 {model_name.upper()}: Predictions made (no labels for evaluation)")
                     
             except Exception as e:
                 print(f"   ❌ Error making predictions with {model_name.upper()}: {e}")
@@ -2429,12 +2247,10 @@ def run_prediction(args):
             'y_true': y_true
         }
         
-        # ── Plot predictions ──────────────────────────────────────────────────
         if y_true is not None and predictions:
-            _plot_prediction_results(predictions, y_true, duration, output_path, feature_names)
-            _plot_prediction_comparison(predictions, y_true, duration, output_path)
+            _plot_prediction_results(predictions, y_true, duration, output_path, feature_names, label_cfg)
+            _plot_prediction_comparison(predictions, y_true, duration, output_path, label_cfg)
     
-    # ── Save all predictions to CSV ──────────────────────────────────────────
     for duration, data in all_predictions.items():
         if data['predictions']:
             pred_df = pd.DataFrame(data['X_test'], columns=feature_names)
@@ -2450,14 +2266,18 @@ def run_prediction(args):
     print("\n✅ Prediction complete!")
 
 
-def _plot_prediction_results(predictions, y_true, duration, output_path, feature_names):
+def _plot_prediction_results(predictions, y_true, duration, output_path, feature_names, label_cfg=None):
     """
     Plot prediction results including confusion matrices and metrics.
+    
+    Class names are taken from label_cfg if provided (for 3class support).
     """
-    CLASS_NAMES = ['Non-Stress', 'Stress']
+    if label_cfg is not None:
+        CLASS_NAMES = label_cfg.CLASS_NAMES
+    else:
+        CLASS_NAMES = ['Non-Stress', 'Stress']
     n_models = len(predictions)
     
-    # ── Confusion matrices grid ──────────────────────────────────────────────
     ncols = min(3, n_models)
     nrows = (n_models + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols, 
@@ -2489,11 +2309,10 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
             fontsize=10, fontweight='bold'
         )
     
-    # Hide unused subplots
     for ax in axes[n_models:]:
         ax.set_visible(False)
     
-    fig.suptitle(f'Prediction Results – {duration}s Chunks (Test Set)',
+    fig.suptitle(f'Prediction Results \u2013 {duration}s Chunks (Test Set)',
                  fontsize=14, fontweight='bold', y=1.01)
     fig.tight_layout()
     save_path = output_path / f'prediction_confusion_{duration}s.png'
@@ -2501,7 +2320,6 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
     plt.close(fig)
     print(f"   ✓ Saved confusion matrices: {save_path}")
     
-    # ── Metrics bar chart ─────────────────────────────────────────────────────
     metrics_df = pd.DataFrame(metrics_data)
     fig, ax = plt.subplots(figsize=(max(8, n_models * 1.6), 5))
     
@@ -2513,7 +2331,6 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
     bars2 = ax.bar(x + width/2, metrics_df['f1'], width,
                    label='F1 Score', color='#388E3C', alpha=0.8)
     
-    # Add value labels
     for bar in bars1:
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
@@ -2528,7 +2345,7 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
                         rotation=15, ha='right')
     ax.set_ylim(0, 1.1)
     ax.set_ylabel('Score')
-    ax.set_title(f'Model Performance on Test Set – {duration}s Chunks')
+    ax.set_title(f'Model Performance on Test Set \u2013 {duration}s Chunks')
     ax.legend()
     ax.grid(axis='y', ls='--', alpha=0.4)
     
@@ -2538,7 +2355,6 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
     plt.close(fig)
     print(f"   ✓ Saved metrics chart: {save_path}")
     
-    # ── Print detailed classification report ──────────────────────────────────
     print(f"\n   📊 Classification Report for {duration}s:")
     print("-" * 50)
     for model_name in predictions.keys():
@@ -2547,7 +2363,7 @@ def _plot_prediction_results(predictions, y_true, duration, output_path, feature
         print(classification_report(y_true, y_pred, target_names=CLASS_NAMES, digits=3))
 
 
-def _plot_prediction_comparison(predictions, y_true, duration, output_path):
+def _plot_prediction_comparison(predictions, y_true, duration, output_path, label_cfg=None):
     """
     Plot comparison of predictions across models for a sample of test points.
     """
@@ -2555,12 +2371,10 @@ def _plot_prediction_comparison(predictions, y_true, duration, output_path):
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    # Plot true labels
     x = np.arange(n_samples)
     ax.scatter(x, y_true[:n_samples], color='black', s=30, 
                marker='s', label='True Labels', zorder=5)
     
-    # Plot predictions for each model with slight offset
     offsets = np.linspace(-0.1, 0.1, len(predictions))
     for i, (model_name, y_pred) in enumerate(predictions.items()):
         offset = offsets[i]
@@ -2568,10 +2382,8 @@ def _plot_prediction_comparison(predictions, y_true, duration, output_path):
                    label=model_name.upper(), marker='o')
     
     ax.set_xlabel('Sample Index')
-    ax.set_ylabel('Class (0=Non-Stress, 1=Stress)')
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(['Non-Stress', 'Stress'])
-    ax.set_title(f'Model Predictions Comparison – {duration}s Chunks (First {n_samples} samples)')
+    ax.set_ylabel('Class')
+    ax.set_title(f'Model Predictions Comparison \u2013 {duration}s Chunks (First {n_samples} samples)')
     ax.legend(loc='upper right', fontsize=8)
     ax.grid(True, ls='--', alpha=0.3)
     
@@ -2582,21 +2394,20 @@ def _plot_prediction_comparison(predictions, y_true, duration, output_path):
     print(f"   ✓ Saved predictions comparison: {save_path}")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════════
 
 def main():
     """Main entry point for CLI application."""
     parser = parse_arguments()
 
-    # If no arguments provided, show help
     if len(sys.argv) == 1:
         parser.print_help()
         return
 
-    # Parse arguments
     args = parser.parse_args()
 
-    # Execute appropriate command based on flags
     if args.correlation:
         run_correlation_analysis(args)
     elif args.full_signal:
