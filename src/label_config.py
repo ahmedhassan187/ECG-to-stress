@@ -69,6 +69,9 @@ class LabelConfig:
         # Ordered list of class names (index = target label)
         self.CLASS_NAMES: list[str] = cfg['CLASS_NAMES']
 
+        # Human-readable description of the label mode
+        self.description: str = cfg['description']
+
         # Number of classes
         self.N_CLASSES: int = cfg['N_CLASSES']
 
