@@ -188,7 +188,7 @@ EXAMPLES:
         '--by-condition',
         action='store_true',
         dest='by_condition',
-        help='Also compute correlation metrics separately for stress (label 2) and non-stress (labels 1,3,4)'
+        help='Also compute correlation metrics separately for stress and non-stress (split derived from --labels config)'
     )
 
     # ========== SHARED OPTIONS ==========
@@ -1046,11 +1046,14 @@ def run_correlation_analysis(args):
         print("\n" + "=" * 80)
         print("PER-CONDITION ANALYSIS (stress vs non-stress)")
         print("=" * 80)
-        STRESS_LABELS = {2}
-        NON_STRESS_LABELS = {1, 3, 4}
+        # Derive condition labels from the LabelConfig so that the split
+        # respects whichever label scheme was chosen via --labels.
+        # Stress = any raw label that maps to target=1
+        stress_raw_labels = {raw for raw, tgt in label_cfg.LABEL_MAP.items() if tgt == 1}
+        non_stress_raw_labels = {raw for raw, tgt in label_cfg.LABEL_MAP.items() if tgt != 1}
 
-        for cond_name, cond_labels in [('stress', STRESS_LABELS),
-                                       ('non_stress', NON_STRESS_LABELS)]:
+        for cond_name, cond_labels in [('stress', stress_raw_labels),
+                                       ('non_stress', non_stress_raw_labels)]:
             _run_condition_correlation(
                 per_duration_features, per_duration_labels,
                 durations, feature_list, corr_analyzer,
