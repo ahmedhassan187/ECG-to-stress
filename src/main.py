@@ -4,7 +4,7 @@ Command-line interface for WESAD dataset analysis, feature extraction, correlati
 machine learning model training, and FFT frequency analysis.
 
 Label modes (controlled via --labels / -l):
-    binary  (default)  1→0, 2→1, 3→0, 4→1  (Non-Stress / Stress)
+    binary  (default)  1→0, 2→1, 3→0, 4→0  (Non-Stress / Stress)
     3class             1→0, 2→1, 3→2, 4→2  (Baseline / Stress / Amusement·Meditation)
 
 Usage Examples:
