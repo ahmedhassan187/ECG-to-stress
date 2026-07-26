@@ -4,14 +4,14 @@ Label configuration for WESAD dataset analysis.
 Provides a centralised mapping from raw WESAD labels (1–4) to target labels
 for different analysis modes.  Currently supports:
 
-    binary  (default)  1→0, 2→1, 3→0, 4→0   (Non-Stress / Stress)  — only Stress=1
-    3class              1→0, 2→1, 3→2, 4→2   (Baseline / Stress / Amusement·Meditation)
+    binary  (default)  1→0, 2→1, 3→0, 4→0   (No Stress / Stress)
+    3class              1→0, 2→1, 3→0, 4→2   (No Stress+Amusement / Stress / Meditation)
 
 Usage:
     from label_config import LabelConfig
     cfg = LabelConfig('3class')
-    target = cfg.LABEL_MAP[raw_label]          # 1 → 0, 2 → 1, 3 → 2, 4 → 2
-    name   = cfg.TARGET_NAMES[target]          # 0 → 'Baseline', …
+    target = cfg.LABEL_MAP[raw_label]          # 1 → 0, 2 → 1, 3 → 0, 4 → 2
+    name   = cfg.TARGET_NAMES[target]          # 0 → 'No Stress / Amusement', …
 """
 
 
@@ -21,25 +21,25 @@ class LabelConfig:
     # ── Pre-defined modes ──────────────────────────────────────────────────────
     MODES = {
         'binary': {
-            'description': 'Binary classification: Non-Stress (0) vs Stress (1)'
+            'description': 'Binary classification: No Stress (0) vs Stress (1)'
                            ' — only Stress=2 is mapped to 1',
             'VALID_LABELS': [1, 2, 3, 4],
             'LABEL_MAP': {1: 0, 2: 1, 3: 0, 4: 0},
-            'TARGET_NAMES': {0: 'Non-Stress', 1: 'Stress'},
-            'CLASS_NAMES': ['Non-Stress', 'Stress'],
+            'TARGET_NAMES': {0: 'No Stress', 1: 'Stress'},
+            'CLASS_NAMES': ['No Stress', 'Stress'],
             'N_CLASSES': 2,
             'COLORS': {0: '#2196F3', 1: '#F44336'},
             'label_source': 'wesad_binary 1→0 ; 2→1 ; (3,4)→0',
         },
         '3class': {
-            'description': '3-class: Baseline (0), Stress (1), Amusement/Meditation (2)',
+            'description': '3-class: No Stress+Amusement (0), Stress (1), Meditation (2)',
             'VALID_LABELS': [1, 2, 3, 4],
-            'LABEL_MAP': {1: 0, 2: 1, 3: 2, 4: 2},
-            'TARGET_NAMES': {0: 'Baseline', 1: 'Stress', 2: 'Amusement/Meditation'},
-            'CLASS_NAMES': ['Baseline', 'Stress', 'Amusement/Meditation'],
+            'LABEL_MAP': {1: 0, 2: 1, 3: 0, 4: 2},
+            'TARGET_NAMES': {0: 'No Stress / Amusement', 1: 'Stress', 2: 'Meditation'},
+            'CLASS_NAMES': ['No Stress / Amusement', 'Stress', 'Meditation'],
             'N_CLASSES': 3,
-            'COLORS': {0: '#4CAF50', 1: '#F44336', 2: '#FF9800'},
-            'label_source': 'wesad_3class 1→0 ; 2→1 ; (3,4)→2',
+            'COLORS': {0: '#4CAF50', 1: '#F44336', 2: '#9C27B0'},
+            'label_source': 'wesad_3class 1→0 ; 2→1 ; 3→0 ; 4→2',
         },
     }
 
