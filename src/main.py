@@ -923,10 +923,13 @@ def run_correlation_analysis(args):
         print(f"✓ Extracted {len(df)} chunks with 8 HRV features")
 
         if len(feature_list) >= 2:
-            print(f"📈 Generating correlation matrix heatmap for {len(feature_list)} features...")
-            corr_features = [f for f in feature_list if f in df.columns]
-            if len(corr_features) >= 2:
-                fig, ax = viz.plot_features_corr_mat(df, feature_cols=corr_features)
+            # Exclude power features (lf_power, hf_power, lf_hf_ratio) from heatmap
+            # as they are often NaN for short windows
+            power_features = {'lf_power', 'hf_power', 'lf_hf_ratio'}
+            heatmap_features = [f for f in feature_list if f not in power_features and f in df.columns]
+            print(f"📈 Generating correlation matrix heatmap for {len(heatmap_features)} features (excluding power features)...")
+            if len(heatmap_features) >= 2:
+                fig, ax = viz.plot_features_corr_mat(df, feature_cols=heatmap_features)
                 corr_path = output_path / f"correlation_matrix_{duration}s.png"
                 fig.savefig(corr_path, dpi=150, bbox_inches='tight')
                 plt.close(fig)
