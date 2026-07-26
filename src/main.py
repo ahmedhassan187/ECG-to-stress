@@ -1044,16 +1044,19 @@ def run_correlation_analysis(args):
 
     if getattr(args, 'by_condition', False):
         print("\n" + "=" * 80)
-        print("PER-CONDITION ANALYSIS (stress vs non-stress)")
+        print("PER-CONDITION ANALYSIS")
         print("=" * 80)
         # Derive condition labels from the LabelConfig so that the split
         # respects whichever label scheme was chosen via --labels.
-        # Stress = any raw label that maps to target=1
-        stress_raw_labels = {raw for raw, tgt in label_cfg.LABEL_MAP.items() if tgt == 1}
-        non_stress_raw_labels = {raw for raw, tgt in label_cfg.LABEL_MAP.items() if tgt != 1}
+        # Build condition groups: one per target label
+        condition_groups = {}
+        for raw, tgt in label_cfg.LABEL_MAP.items():
+            cond_name = label_cfg.target_name(tgt).lower().replace(' / ', '_').replace(' ', '_')
+            if cond_name not in condition_groups:
+                condition_groups[cond_name] = set()
+            condition_groups[cond_name].add(raw)
 
-        for cond_name, cond_labels in [('stress', stress_raw_labels),
-                                       ('non_stress', non_stress_raw_labels)]:
+        for cond_name, cond_labels in condition_groups.items():
             _run_condition_correlation(
                 per_duration_features, per_duration_labels,
                 durations, feature_list, corr_analyzer,
