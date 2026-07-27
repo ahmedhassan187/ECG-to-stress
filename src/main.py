@@ -1299,7 +1299,9 @@ def run_ml_training(args):
     print(f"📁 Model save directory: {model_dir}")
     
     print(f"📊 Cross-validation folds: {args.cross_val}")
-    
+
+    all_results_by_duration = {}  # Collect results across all durations
+
     for duration in args.dataset:
         print(f"\n⏱️  Processing {duration}s chunks...")
         
@@ -1442,7 +1444,7 @@ def run_ml_training(args):
 
             summary_df = pd.DataFrame(summary_rows).set_index('model')
 
-            summary_path = output_path / f"ml_results_{duration}s.csv"
+            summary_path = output_path / f"ml_results_{duration}s_{args.labels}.csv"
             summary_df.to_csv(summary_path)
             print(f"✓ Saved results CSV: {summary_path}")
 
@@ -1450,7 +1452,14 @@ def run_ml_training(args):
             _plot_results_table(summary_df, duration, output_path)
             _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg)
 
+            # Store summary for the combined table across all durations
+            all_results_by_duration[duration] = {'summary_df': summary_df, 'all_results': all_results}
+
         print(f"✓ {duration}s dataset processing complete")
+
+    # After all durations processed, generate the combined summary table
+    # (Duration | Best Model | Accuracy | F1 | AUC)
+    _plot_ml_summary_table(all_results_by_duration, output_path)
 
     print("\n✅ ML model training complete!")
 
@@ -1638,6 +1647,108 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
     plt.close(fig)
     print(f"✓ Saved confusion matrix grid : {grid_path}")
     print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s.png")
+
+
+def _plot_ml_summary_table(all_results_by_duration, output_path):
+    """
+    Generate a combined summary table (Duration | Best Model | Accuracy | F1 | AUC)
+    across all durations, saved as a styled PNG and CSV.
+    """
+    if not all_results_by_duration:
+        return
+
+    rows = []
+    for duration in sorted(all_results_by_duration.keys()):
+        data = all_results_by_duration[duration]
+        summary_df = data['summary_df']
+
+        # Find best model by F1
+        if 'f1_mean' not in summary_df.columns:
+            continue
+        best_model = summary_df['f1_mean'].idxmax()
+        best_f1 = summary_df.loc[best_model, 'f1_mean']
+        best_acc = summary_df.loc[best_model, 'accuracy_mean'] if 'accuracy_mean' in summary_df.columns else np.nan
+
+        rows.append({
+            'Duration': f'{duration} s',
+            'Best Model': best_model.replace('_', ' ').title(),
+            'Accuracy': best_acc,
+            'F1': best_f1,
+            'AUC': np.nan,  # AUC not computed during training
+        })
+
+    if not rows:
+        return
+
+    df = pd.DataFrame(rows)
+
+    # Save CSV
+    csv_path = output_path / 'ml_summary_table.csv'
+    df.to_csv(csv_path, index=False)
+    print(f"✓ Saved summary table CSV: {csv_path}")
+
+    # Plot styled table
+    fig, ax = plt.subplots(figsize=(10, 3.5))
+    ax.axis('off')
+
+    col_labels = list(df.columns)
+    cell_text = []
+    for _, row in df.iterrows():
+        cell_text.append([
+            row['Duration'],
+            row['Best Model'],
+            f'{row["Accuracy"]:.4f}',
+            f'{row["F1"]:.4f}',
+            'N/A' if np.isnan(row['AUC']) else f'{row["AUC"]:.4f}',
+        ])
+
+    n_rows = len(cell_text)
+    n_cols = len(col_labels)
+
+    cmap = plt.cm.RdYlGn
+    cell_colors = []
+    for r in range(n_rows):
+        row_colors = []
+        for c in range(n_cols):
+            val = df.iloc[r, c]
+            if c >= 2:  # Metric columns
+                if isinstance(val, (int, float)) and not np.isnan(val):
+                    norm = np.clip((val - 0.3) / 0.7, 0, 1)
+                    row_colors.append(cmap(norm))
+                else:
+                    row_colors.append((0.9, 0.9, 0.9, 1.0))
+            else:
+                row_colors.append((0.95, 0.95, 0.95, 1.0))
+        cell_colors.append(row_colors)
+
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        cellColours=cell_colors,
+        cellLoc='center',
+        loc='center',
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1.7, 2.4)
+
+    for (r, c), cell in table.get_celld().items():
+        if r == 0:
+            cell.set_facecolor('#2c3e50')
+            cell.set_text_props(color='white', fontweight='bold', fontsize=13, ha='center', va='center')
+        cell.set_edgecolor('#bdc3c7')
+        cell.set_linewidth(1.5)
+
+    ax.set_title(
+        'Best Model Performance by Window Duration',
+        fontsize=15, fontweight='bold', pad=18,
+    )
+
+    fig.tight_layout()
+    png_path = output_path / 'ml_summary_table.png'
+    fig.savefig(png_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ Saved summary table PNG: {png_path}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
