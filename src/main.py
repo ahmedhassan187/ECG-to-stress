@@ -1302,165 +1302,187 @@ def run_ml_training(args):
 
     all_results_by_duration = {}  # Collect results across all durations
 
-    for duration in args.dataset:
-        print(f"\n⏱️  Processing {duration}s chunks...")
+    # Determine which label modes to run
+    label_modes_to_run = [args.labels]
+    if args.labels == '3class':
+        label_modes_to_run = ['3class', 'binary']
+        print("📋 Also running binary classification for comparison...")
+
+    for mode in label_modes_to_run:
+        print(f"\n{'='*60}")
+        print(f"  Label mode: {mode}")
+        print(f"{'='*60}")
         
-        chunk_size = duration * 700
-        all_chunks = []
-        all_labels = []
-        all_subject_ids = []
-        
-        for subj_id, (ecg, label) in enumerate(zip(ecgs, labels)):
-            valid_mask = np.isin(label, label_cfg.VALID_LABELS)
-            valid_ecg = ecg[valid_mask]
-            valid_label = label[valid_mask]
+        # Create label config for this mode
+        if mode != args.labels:
+            current_label_cfg = LabelConfig(mode)
+            print(f"  {current_label_cfg.description}")
+        else:
+            current_label_cfg = label_cfg
+
+        for duration in args.dataset:
+            print(f"\n⏱️  Processing {duration}s chunks ({mode})...")
             
-            for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
-                chunk = valid_ecg[i:i + chunk_size]
-                chunk_label = valid_label[i]
+            chunk_size = duration * 700
+            all_chunks = []
+            all_labels = []
+            all_subject_ids = []
+            
+            for subj_id, (ecg, label) in enumerate(zip(ecgs, labels)):
+                valid_mask = np.isin(label, current_label_cfg.VALID_LABELS)
+                valid_ecg = ecg[valid_mask]
+                valid_label = label[valid_mask]
                 
-                all_chunks.append(chunk)
-                # Map raw label → target label
-                target_label = label_cfg.map_label(int(chunk_label))
-                all_labels.append(target_label)
-                all_subject_ids.append(subj_id)
-        
-        print(f"✓ Created {len(all_chunks)} chunks")
-        
-        feature_list = []
-        for chunk in all_chunks:
-            try:
-                features_dict = feature_extractor.get_hrv_features(chunk)
-                feature_values = [
-                    features_dict.get('mean_rr', np.nan),
-                    features_dict.get('mean_hr', np.nan),
-                    features_dict.get('sdnn', np.nan),
-                    features_dict.get('rmssd', np.nan),
-                    features_dict.get('pnn50', np.nan),
-                    features_dict.get('lf_power', np.nan),
-                    features_dict.get('hf_power', np.nan),
-                    features_dict.get('lf_hf_ratio', np.nan)
-                ]
-                feature_list.append(feature_values)
-            except:
-                feature_list.append([np.nan] * 8)
-        
-        feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
-        df = pd.DataFrame(feature_list, columns=feature_names)
-        df['label'] = all_labels
-        df['subject_id'] = all_subject_ids
-        
-        n_before = len(df)
-        nan_count = df[feature_names].isna().sum().sum()
-        if nan_count > 0:
-            fill_values = df[feature_names].median()
-            fill_values = fill_values.fillna(0)
-            df[feature_names] = df[feature_names].fillna(fill_values)
-            print(f"⚠️  Imputed {nan_count} NaN values with feature medians")
-        n_after = len(df)
-        
-        X = df[feature_names].values
-        y = df['label'].values
-        
-        print(f"✓ Feature matrix: {X.shape[0]} samples × {X.shape[1]} features")
-        # Show class distribution with human-readable names
-        class_counts = pd.Series(y).value_counts().sort_index()
-        dist_str = ', '.join([f"{label_cfg.target_name(int(k))}: {v}" for k, v in class_counts.items()])
-        print(f"✓ Class distribution: {dist_str}")
-        
-        print(f"🚀 Training {len(models_to_train)} models with {args.cross_val}-fold cross-validation...")
+                for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
+                    chunk = valid_ecg[i:i + chunk_size]
+                    chunk_label = valid_label[i]
+                    
+                    all_chunks.append(chunk)
+                    # Map raw label → target label
+                    target_label = current_label_cfg.map_label(int(chunk_label))
+                    all_labels.append(target_label)
+                    all_subject_ids.append(subj_id)
+            
+            print(f"✓ Created {len(all_chunks)} chunks")
+            
+            feature_list = []
+            for chunk in all_chunks:
+                try:
+                    features_dict = feature_extractor.get_hrv_features(chunk)
+                    feature_values = [
+                        features_dict.get('mean_rr', np.nan),
+                        features_dict.get('mean_hr', np.nan),
+                        features_dict.get('sdnn', np.nan),
+                        features_dict.get('rmssd', np.nan),
+                        features_dict.get('pnn50', np.nan),
+                        features_dict.get('lf_power', np.nan),
+                        features_dict.get('hf_power', np.nan),
+                        features_dict.get('lf_hf_ratio', np.nan)
+                    ]
+                    feature_list.append(feature_values)
+                except:
+                    feature_list.append([np.nan] * 8)
+            
+            feature_names = ['mean_rr', 'mean_hr', 'sdnn', 'rmssd', 'pnn50', 'lf_power', 'hf_power', 'lf_hf_ratio']
+            df = pd.DataFrame(feature_list, columns=feature_names)
+            df['label'] = all_labels
+            df['subject_id'] = all_subject_ids
+            
+            n_before = len(df)
+            nan_count = df[feature_names].isna().sum().sum()
+            if nan_count > 0:
+                fill_values = df[feature_names].median()
+                fill_values = fill_values.fillna(0)
+                df[feature_names] = df[feature_names].fillna(fill_values)
+                print(f"⚠️  Imputed {nan_count} NaN values with feature medians")
+            n_after = len(df)
+            
+            X = df[feature_names].values
+            y = df['label'].values
+            
+            print(f"✓ Feature matrix: {X.shape[0]} samples × {X.shape[1]} features")
+            # Show class distribution with human-readable names
+            class_counts = pd.Series(y).value_counts().sort_index()
+            dist_str = ', '.join([f"{current_label_cfg.target_name(int(k))}: {v}" for k, v in class_counts.items()])
+            print(f"✓ Class distribution: {dist_str}")
+            
+            print(f"🚀 Training {len(models_to_train)} models with {args.cross_val}-fold cross-validation...")
 
-        all_results = {}
-        for model_name in models_to_train:
-            model = _get_model(model_name)
-            if model is None:
-                print(f"   \u2192 {model_name.upper()}... ⚠️ skipped (not available)")
-                continue
-
-            try:
-                models_dict = {model_name: model}
-                results = ml_evaluator.eval_all(
-                    df, models_dict, feature_names,
-                    subject_col='subject_id', label_col='label',
-                    cv_method='kfold'
-                )
-                all_results[model_name] = results[model_name]
-                overall = results[model_name]['overall']
+            all_results = {}
+            for model_name in models_to_train:
+                model = _get_model(model_name)
+                if model is None:
+                    print(f"   \u2192 {model_name.upper()}... ⚠️ skipped (not available)")
+                    continue
 
                 try:
-                    from sklearn.base import clone as _clone
-                    final_model = _clone(model)
-                    final_model.fit(X, y)
-                except Exception as fit_err:
+                    models_dict = {model_name: model}
+                    results = ml_evaluator.eval_all(
+                        df, models_dict, feature_names,
+                        subject_col='subject_id', label_col='label',
+                        cv_method='kfold'
+                    )
+                    all_results[model_name] = results[model_name]
+                    overall = results[model_name]['overall']
+
+                    try:
+                        from sklearn.base import clone as _clone
+                        final_model = _clone(model)
+                        final_model.fit(X, y)
+                    except Exception as fit_err:
+                        print(f"   \u2192 {model_name.upper()}... "
+                              f"⚠️ Could not refit on full data: {fit_err}. "
+                              f"Saving unfitted model (prediction will fail).")
+                        final_model = model
+
+                    model_path = model_dir / f"{model_name}_{duration}s_{mode}.pkl"
+                    joblib.dump(final_model, model_path)
+
+                    # Build human-readable label mapping for metadata
+                    meta_label_mapping = {k: current_label_cfg.target_name(int(k))
+                                          for k in sorted(set(y))}
+
+                    meta_path = model_dir / f"{model_name}_{duration}s_{mode}.meta.pkl"
+                    joblib.dump({
+                        'feature_names': feature_names,
+                        'duration': duration,
+                        'label_mapping': meta_label_mapping,
+                        'label_source': current_label_cfg.label_source,
+                        'label_mode': mode,
+                        'trained_on': 'wesad',
+                    }, meta_path)
+
+                    f1_info = ""
+                    if current_label_cfg.N_CLASSES > 2:
+                        f1_info = f" (macro)"
                     print(f"   \u2192 {model_name.upper()}... "
-                          f"⚠️ Could not refit on full data: {fit_err}. "
-                          f"Saving unfitted model (prediction will fail).")
-                    final_model = model
+                          f"Accuracy: {overall['accuracy_mean']:.4f} "
+                          f"(±{overall['accuracy_std']:.4f}), "
+                          f"F1: {overall['f1_mean']:.4f} "
+                          f"(±{overall['f1_std']:.4f}){f1_info} "
+                          f"✓ Saved: {model_path}")
+                except Exception as e:
+                    print(f"   \u2192 {model_name.upper()}... ❌ Error: {e}")
+            
+            if all_results:
+                summary_rows = []
+                for model_name, result in all_results.items():
+                    overall = result['overall']
+                    summary_rows.append({
+                        'model'           : model_name,
+                        'accuracy_mean'   : overall['accuracy_mean'],
+                        'accuracy_std'    : overall['accuracy_std'],
+                        'f1_mean'         : overall['f1_mean'],
+                        'f1_std'          : overall['f1_std'],
+                        'precision_mean'  : overall['precision_mean'],
+                        'precision_std'   : overall['precision_std'],
+                        'recall_mean'     : overall['recall_mean'],
+                        'recall_std'      : overall['recall_std'],
+                        'auc_mean'        : overall.get('auc_mean', np.nan),
+                        'auc_std'         : overall.get('auc_std', np.nan),
+                    })
 
-                model_path = model_dir / f"{model_name}_{duration}s.pkl"
-                joblib.dump(final_model, model_path)
+                summary_df = pd.DataFrame(summary_rows).set_index('model')
 
-                # Build human-readable label mapping for metadata
-                meta_label_mapping = {k: label_cfg.target_name(int(k))
-                                      for k in sorted(set(y))}
+                summary_path = output_path / f"ml_results_{duration}s_{mode}.csv"
+                summary_df.to_csv(summary_path)
+                print(f"✓ Saved results CSV: {summary_path}")
 
-                meta_path = model_dir / f"{model_name}_{duration}s.meta.pkl"
-                joblib.dump({
-                    'feature_names': feature_names,
-                    'duration': duration,
-                    'label_mapping': meta_label_mapping,
-                    'label_source': label_cfg.label_source,
-                    'label_mode': args.labels,
-                    'trained_on': 'wesad',
-                }, meta_path)
+                _plot_model_comparison(summary_df, duration, output_path, suffix=f"_{mode}")
+                _plot_results_table(summary_df, duration, output_path, suffix=f"_{mode}")
+                _plot_confusion_matrices_grid(all_results, duration, output_path, current_label_cfg, suffix=f"_{mode}")
 
-                f1_info = ""
-                if label_cfg.N_CLASSES > 2:
-                    f1_info = f" (macro)"
-                print(f"   \u2192 {model_name.upper()}... "
-                      f"Accuracy: {overall['accuracy_mean']:.4f} "
-                      f"(±{overall['accuracy_std']:.4f}), "
-                      f"F1: {overall['f1_mean']:.4f} "
-                      f"(±{overall['f1_std']:.4f}){f1_info} "
-                      f"✓ Saved: {model_path}")
-            except Exception as e:
-                print(f"   \u2192 {model_name.upper()}... ❌ Error: {e}")
-        
-        if all_results:
-            summary_rows = []
-            for model_name, result in all_results.items():
-                overall = result['overall']
-                summary_rows.append({
-                    'model'           : model_name,
-                    'accuracy_mean'   : overall['accuracy_mean'],
-                    'accuracy_std'    : overall['accuracy_std'],
-                    'f1_mean'         : overall['f1_mean'],
-                    'f1_std'          : overall['f1_std'],
-                    'precision_mean'  : overall['precision_mean'],
-                    'precision_std'   : overall['precision_std'],
-                    'recall_mean'     : overall['recall_mean'],
-                    'recall_std'      : overall['recall_std'],
-                    'auc_mean'        : overall.get('auc_mean', np.nan),
-                    'auc_std'         : overall.get('auc_std', np.nan),
-                })
+                # Store summary for the combined table across all durations (keyed by mode+duration)
+                all_results_by_duration[(mode, duration)] = {
+                    'summary_df': summary_df,
+                    'all_results': all_results,
+                    'label_mode': mode
+                }
 
-            summary_df = pd.DataFrame(summary_rows).set_index('model')
-
-            summary_path = output_path / f"ml_results_{duration}s_{args.labels}.csv"
-            summary_df.to_csv(summary_path)
-            print(f"✓ Saved results CSV: {summary_path}")
-
-            _plot_model_comparison(summary_df, duration, output_path)
-            _plot_results_table(summary_df, duration, output_path)
-            _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg)
-
-            # Store summary for the combined table across all durations
-            all_results_by_duration[duration] = {'summary_df': summary_df, 'all_results': all_results}
-
-        print(f"✓ {duration}s dataset processing complete")
+            print(f"✓ {duration}s dataset processing complete ({mode})")
 
     # After all durations processed, generate the combined summary table
-    # (Duration | Best Model | Accuracy | F1 | AUC)
+    # (Label Mode | Duration | Best Model | Accuracy | F1 | AUC)
     _plot_ml_summary_table(all_results_by_duration, output_path)
 
     print("\n✅ ML model training complete!")
@@ -1468,7 +1490,7 @@ def run_ml_training(args):
 
 # ── ML output helpers ─────────────────────────────────────────────────────────
 
-def _plot_model_comparison(summary_df, duration, output_path):
+def _plot_model_comparison(summary_df, duration, output_path, suffix=''):
     """Grouped bar chart comparing Accuracy and F1 across all models."""
     models  = summary_df.index.tolist()
     x       = np.arange(len(models))
@@ -1513,7 +1535,7 @@ def _plot_model_comparison(summary_df, duration, output_path):
     print(f"✓ Saved comparison chart: {save_path}")
 
 
-def _plot_results_table(summary_df, duration, output_path):
+def _plot_results_table(summary_df, duration, output_path, suffix=''):
     """Render the results summary as a styled table image."""
     display_cols = ['accuracy_mean', 'accuracy_std',
                     'f1_mean', 'f1_std',
@@ -1653,16 +1675,17 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
 
 def _plot_ml_summary_table(all_results_by_duration, output_path):
     """
-    Generate a combined summary table (Duration | Best Model | Accuracy | F1 | AUC)
+    Generate a combined summary table (Label Mode | Duration | Best Model | Accuracy | F1 | AUC)
     across all durations, saved as a styled PNG and CSV.
     """
     if not all_results_by_duration:
         return
 
     rows = []
-    for duration in sorted(all_results_by_duration.keys()):
-        data = all_results_by_duration[duration]
+    for key in sorted(all_results_by_duration.keys()):
+        data = all_results_by_duration[key]
         summary_df = data['summary_df']
+        label_mode = data.get('label_mode', 'binary')
 
         # Find best model by F1
         if 'f1_mean' not in summary_df.columns:
@@ -1676,7 +1699,15 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
         if 'auc_mean' in summary_df.columns and best_model in summary_df.index:
             best_auc = summary_df.loc[best_model, 'auc_mean']
 
+        # key is (mode, duration) tuple or just duration (backwards compat)
+        if isinstance(key, tuple):
+            mode, duration = key
+        else:
+            mode = 'binary'
+            duration = key
+
         rows.append({
+            'Label Mode': mode.title(),
             'Duration': f'{duration} s',
             'Best Model': best_model.replace('_', ' ').title(),
             'Accuracy': best_acc,
@@ -1695,13 +1726,17 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
     print(f"✓ Saved summary table CSV: {csv_path}")
 
     # Plot styled table
-    fig, ax = plt.subplots(figsize=(10, 3.5))
+    n_rows = len(df)
+    n_cols = len(df.columns)
+    fig_h = max(3.5, 0.6 * n_rows + 1.5)
+    fig, ax = plt.subplots(figsize=(max(10, n_cols * 1.6), fig_h))
     ax.axis('off')
 
     col_labels = list(df.columns)
     cell_text = []
     for _, row in df.iterrows():
         cell_text.append([
+            row['Label Mode'],
             row['Duration'],
             row['Best Model'],
             f'{row["Accuracy"]:.4f}',
@@ -1709,16 +1744,13 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
             'N/A' if np.isnan(row['AUC']) else f'{row["AUC"]:.4f}',
         ])
 
-    n_rows = len(cell_text)
-    n_cols = len(col_labels)
-
     cmap = plt.cm.RdYlGn
     cell_colors = []
     for r in range(n_rows):
         row_colors = []
         for c in range(n_cols):
             val = df.iloc[r, c]
-            if c >= 2:  # Metric columns
+            if c >= 3:  # Metric columns (Accuracy, F1, AUC)
                 if isinstance(val, (int, float)) and not np.isnan(val):
                     norm = np.clip((val - 0.3) / 0.7, 0, 1)
                     row_colors.append(cmap(norm))
@@ -1736,19 +1768,19 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
         loc='center',
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(12)
-    table.scale(1.7, 2.4)
+    table.set_fontsize(10)
+    table.scale(1.5, 2.0)
 
     for (r, c), cell in table.get_celld().items():
         if r == 0:
             cell.set_facecolor('#2c3e50')
-            cell.set_text_props(color='white', fontweight='bold', fontsize=13, ha='center', va='center')
+            cell.set_text_props(color='white', fontweight='bold', fontsize=11, ha='center', va='center')
         cell.set_edgecolor('#bdc3c7')
         cell.set_linewidth(1.5)
 
     ax.set_title(
-        'Best Model Performance by Window Duration',
-        fontsize=15, fontweight='bold', pad=18,
+        'Best Model Performance by Label Mode & Window Duration',
+        fontsize=14, fontweight='bold', pad=16,
     )
 
     fig.tight_layout()
