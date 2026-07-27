@@ -1440,6 +1440,8 @@ def run_ml_training(args):
                     'precision_std'   : overall['precision_std'],
                     'recall_mean'     : overall['recall_mean'],
                     'recall_std'      : overall['recall_std'],
+                    'auc_mean'        : overall.get('auc_mean', np.nan),
+                    'auc_std'         : overall.get('auc_std', np.nan),
                 })
 
             summary_df = pd.DataFrame(summary_rows).set_index('model')
@@ -1669,12 +1671,17 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
         best_f1 = summary_df.loc[best_model, 'f1_mean']
         best_acc = summary_df.loc[best_model, 'accuracy_mean'] if 'accuracy_mean' in summary_df.columns else np.nan
 
+        # Get AUC for best model
+        best_auc = np.nan
+        if 'auc_mean' in summary_df.columns and best_model in summary_df.index:
+            best_auc = summary_df.loc[best_model, 'auc_mean']
+
         rows.append({
             'Duration': f'{duration} s',
             'Best Model': best_model.replace('_', ' ').title(),
             'Accuracy': best_acc,
             'F1': best_f1,
-            'AUC': np.nan,  # AUC not computed during training
+            'AUC': best_auc,
         })
 
     if not rows:

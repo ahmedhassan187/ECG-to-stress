@@ -152,6 +152,7 @@ class ML:
                 recalls = []
                 all_y_true = []
                 all_y_pred = []
+                all_y_pred_proba = []
 
                 for train_idx, test_idx in skf.split(X, y):
                     X_train, X_test = X[train_idx], X[test_idx]
@@ -164,17 +165,51 @@ class ML:
                     all_y_true.extend(y_test)
                     all_y_pred.extend(y_pred)
 
+                    # Collect predicted probabilities for AUC
+                    if hasattr(model_clone, 'predict_proba'):
+                        y_proba = model_clone.predict_proba(X_test)
+                        all_y_pred_proba.append(y_proba)
+                    else:
+                        all_y_pred_proba.append(None)
+
                     accuracies.append(accuracy_score(y_test, y_pred))
                     f1_scores.append(f1_score(y_test, y_pred, average=avg, zero_division=0))
                     precisions.append(precision_score(y_test, y_pred, average=avg, zero_division=0))
                     recalls.append(recall_score(y_test, y_pred, average=avg, zero_division=0))
+
+                # Compute AUC from aggregated predictions
+                n_unique = len(np.unique(all_y_true))
+                auc_mean = np.nan
+                auc_std = np.nan
+                auc_scores = []
+                if all_y_pred_proba[0] is not None:
+                    # Stack all fold probabilities
+                    try:
+                        y_pred_proba_full = np.vstack(all_y_pred_proba)
+                        if n_unique == 2:
+                            # Binary: use probability of positive class
+                            y_score = y_pred_proba_full[:, 1]
+                            auc_val = roc_auc_score(all_y_true, y_score)
+                            auc_scores = [auc_val]
+                            auc_mean = auc_val
+                            auc_std = 0.0
+                        else:
+                            # Multi-class: use full probability matrix
+                            auc_val = roc_auc_score(all_y_true, y_pred_proba_full,
+                                                    multi_class='ovr')
+                            auc_scores = [auc_val]
+                            auc_mean = auc_val
+                            auc_std = 0.0
+                    except Exception as e:
+                        print(f"   ⚠️ AUC computation failed: {e}")
 
                 results_dict[model_name] = {
                     'cv_scores': {
                         'accuracy': accuracies,
                         'f1': f1_scores,
                         'precision': precisions,
-                        'recall': recalls
+                        'recall': recalls,
+                        'auc': auc_scores,
                     },
                     'overall': {
                         'accuracy_mean': np.mean(accuracies),
@@ -184,7 +219,9 @@ class ML:
                         'precision_mean': np.mean(precisions),
                         'precision_std': np.std(precisions),
                         'recall_mean': np.mean(recalls),
-                        'recall_std': np.std(recalls)
+                        'recall_std': np.std(recalls),
+                        'auc_mean': auc_mean,
+                        'auc_std': auc_std,
                     },
                     'y_true': all_y_true,
                     'y_pred': all_y_pred,

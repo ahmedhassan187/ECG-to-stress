@@ -33,51 +33,59 @@ RESULTS_DIR = Path("../results/ml_results")
 
 
 def load_results(csv_path):
-    """Load ML results CSV and return dict of {model: {accuracy, f1}}."""
+    """Load ML results CSV and return dict of {model: {accuracy, f1, auc}}."""
     if not csv_path.exists():
         print(f"❌ File not found: {csv_path}")
         return None
     df = pd.read_csv(csv_path, index_col='model')
-    return {
-        row: {
+    result = {}
+    for row in df.index:
+        entry = {
             'accuracy': df.loc[row, 'accuracy_mean'],
             'f1': df.loc[row, 'f1_mean'],
+            'auc': df.loc[row, 'auc_mean'] if 'auc_mean' in df.columns else np.nan,
         }
-        for row in df.index
-    }
+        result[row] = entry
+    return result
 
 
 def plot_side_by_side_bars(binary, threeclass, output_path):
     """
     Create a grouped bar plot:
-    For each model, 4 bars: Binary Accuracy, Binary F1, 3class Accuracy, 3class F1
+    For each model, 6 bars: Binary Accuracy, Binary F1, Binary AUC,
+                            3class Accuracy, 3class F1, 3class AUC
     """
     models = list(binary.keys())
     x = np.arange(len(models))
-    width = 0.2  # Width of each bar
+    width = 0.13  # Width of each bar (narrower to fit 6 bars)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=(16, 6.5))
 
     # Bar positions
     positions = {
-        'Binary Accuracy': x - 1.5 * width,
-        'Binary F1':       x - 0.5 * width,
+        'Binary Accuracy': x - 2.5 * width,
+        'Binary F1':       x - 1.5 * width,
+        'Binary AUC':      x - 0.5 * width,
         '3-Class Accuracy': x + 0.5 * width,
         '3-Class F1':      x + 1.5 * width,
+        '3-Class AUC':     x + 2.5 * width,
     }
 
     colors = {
         'Binary Accuracy': '#1976D2',      # Blue
         'Binary F1':       '#388E3C',      # Green
+        'Binary AUC':      '#7B1FA2',      # Purple
         '3-Class Accuracy': '#FFA000',     # Amber
         '3-Class F1':      '#D32F2F',      # Red
+        '3-Class AUC':     '#00897B',      # Teal
     }
 
     for label, pos in positions.items():
         if '3-Class' in label:
-            values = [threeclass[m][label.split(' ')[-1].lower()] for m in models]
+            metric = label.split(' ')[-1].lower()  # 'accuracy', 'f1', or 'auc'
+            values = [threeclass[m][metric] for m in models]
         else:
-            metric = label.split(' ')[-1].lower()  # 'accuracy' or 'f1'
+            metric = label.split(' ')[-1].lower()  # 'accuracy', 'f1', or 'auc'
             values = [binary[m][metric] for m in models]
 
         bars = ax.bar(pos, values, width, label=label,
@@ -86,10 +94,11 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
 
         # Add value labels on top of bars
         for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + 0.005,
-                    f'{val:.3f}',
-                    ha='center', va='bottom', fontsize=6.5, rotation=45)
+            if not np.isnan(val):
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + 0.005,
+                        f'{val:.3f}',
+                        ha='center', va='bottom', fontsize=6, rotation=45)
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace('_', '\n').title() for m in models],
@@ -100,7 +109,7 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
     ax.set_title('Model Performance Comparison: Binary vs 3-Class\n'
                  '(30s Window Duration, Mean over CV Folds)',
                  fontsize=13, fontweight='bold')
-    ax.legend(fontsize=9, loc='lower right')
+    ax.legend(fontsize=8, loc='lower right', ncol=2)
     ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5,
                label='Chance (binary)')
     ax.grid(axis='y', ls='--', alpha=0.4)
