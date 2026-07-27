@@ -1485,6 +1485,9 @@ def run_ml_training(args):
     # (Label Mode | Duration | Best Model | Accuracy | F1 | AUC)
     _plot_ml_summary_table(all_results_by_duration, output_path)
 
+    # Generate combined bar plots if both binary and 3class results exist
+    _plot_combined_bar_plot(all_results_by_duration, output_path)
+
     print("\n✅ ML model training complete!")
 
 
@@ -1529,7 +1532,7 @@ def _plot_model_comparison(summary_df, duration, output_path, suffix=''):
     ax.grid(axis='y', ls='--', alpha=0.4)
 
     fig.tight_layout()
-    save_path = output_path / f"ml_model_comparison_{duration}s.png"
+    save_path = output_path / f"ml_model_comparison_{duration}s{suffix}.png"
     fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Saved comparison chart: {save_path}")
@@ -1585,13 +1588,13 @@ def _plot_results_table(summary_df, duration, output_path, suffix=''):
                  fontsize=12, fontweight='bold', pad=12)
 
     fig.tight_layout()
-    save_path = output_path / f"ml_results_table_{duration}s.png"
+    save_path = output_path / f"ml_results_table_{duration}s{suffix}.png"
     fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Saved results table: {save_path}")
 
 
-def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=None):
+def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=None, suffix=''):
     """
     One subplot per model, arranged in a grid.
     Each subplot is a confusion matrix for the aggregated CV predictions.
@@ -1656,7 +1659,7 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
             fontsize=10, fontweight='bold'
         )
         fig_ind.tight_layout()
-        ind_path = output_path / f"ml_cm_{model_name}_{duration}s.png"
+        ind_path = output_path / f"ml_cm_{model_name}_{duration}s{suffix}.png"
         fig_ind.savefig(ind_path, dpi=150, bbox_inches='tight')
         plt.close(fig_ind)
 
@@ -1666,11 +1669,11 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
     fig.suptitle(f'Confusion Matrices \u2013 {duration}s Chunks',
                  fontsize=14, fontweight='bold', y=1.01)
     fig.tight_layout()
-    grid_path = output_path / f"ml_confusion_matrices_{duration}s.png"
+    grid_path = output_path / f"ml_confusion_matrices_{duration}s{suffix}.png"
     fig.savefig(grid_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Saved confusion matrix grid : {grid_path}")
-    print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s.png")
+    print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s{suffix}.png")
 
 
 def _plot_ml_summary_table(all_results_by_duration, output_path):
@@ -1788,6 +1791,141 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
     fig.savefig(png_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Saved summary table PNG: {png_path}")
+
+def _plot_combined_bar_plot(all_results_by_duration, output_path):
+    """
+    Generate a side-by-side bar plot comparing binary vs 3-class performance
+    for each duration. For each duration, shows Accuracy and F1 bars for both
+    label modes.
+    """
+    # Group results by duration
+    by_duration = {}
+    for key, data in all_results_by_duration.items():
+        if not isinstance(key, tuple):
+            continue
+        mode, duration = key
+        summary_df = data['summary_df']
+        if duration not in by_duration:
+            by_duration[duration] = {}
+        by_duration[duration][mode] = summary_df
+
+    for duration, mode_dfs in sorted(by_duration.items()):
+        if 'binary' not in mode_dfs or '3class' not in mode_dfs:
+            continue
+
+        binary_df = mode_dfs['binary']
+        threeclass_df = mode_dfs['3class']
+
+        models = sorted(set(list(binary_df.index) + list(threeclass_df.index)))
+        x = np.arange(len(models))
+        width = 0.18  # Width for each of 4 bars: Binary Acc, Binary F1, 3Class Acc, 3Class F1
+
+        fig, ax = plt.subplots(figsize=(max(14, len(models) * 1.8), 6.5))
+
+        # Collect values
+        binary_accs = [binary_df.loc[m, 'accuracy_mean'] if m in binary_df.index else np.nan for m in models]
+        binary_f1s  = [binary_df.loc[m, 'f1_mean'] if m in binary_df.index else np.nan for m in models]
+        three_accs  = [threeclass_df.loc[m, 'accuracy_mean'] if m in threeclass_df.index else np.nan for m in models]
+        three_f1s   = [threeclass_df.loc[m, 'f1_mean'] if m in threeclass_df.index else np.nan for m in models]
+
+        positions = {
+            'Binary Accuracy':  x - 1.5 * width,
+            'Binary F1':        x - 0.5 * width,
+            '3-Class Accuracy': x + 0.5 * width,
+            '3-Class F1':       x + 1.5 * width,
+        }
+
+        colors = {
+            'Binary Accuracy':  '#1976D2',
+            'Binary F1':        '#388E3C',
+            '3-Class Accuracy': '#FFA000',
+            '3-Class F1':       '#D32F2F',
+        }
+
+        for label, pos in positions.items():
+            if 'Binary' in label:
+                values = binary_accs if 'Accuracy' in label else binary_f1s
+            else:
+                values = three_accs if 'Accuracy' in label else three_f1s
+
+            bars = ax.bar(pos, values, width, label=label,
+                         color=colors[label], edgecolor='black', linewidth=0.6,
+                         alpha=0.88)
+            for bar, val in zip(bars, values):
+                if not np.isnan(val):
+                    ax.text(bar.get_x() + bar.get_width() / 2,
+                           bar.get_height() + 0.005,
+                           f'{val:.3f}', ha='center', va='bottom', fontsize=7, rotation=45)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([m.replace('_', '\n').title() for m in models], fontsize=10)
+        ax.set_ylim(0, 1.12)
+        ax.set_ylabel('Score', fontsize=12)
+        ax.set_xlabel('Model', fontsize=12)
+        ax.set_title(f'Model Performance Comparison: Binary vs 3-Class\n'
+                     f'({duration}s Window Duration, Mean over CV Folds)',
+                     fontsize=13, fontweight='bold')
+        ax.legend(fontsize=8, loc='lower right', ncol=2)
+        ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5, label='Chance (binary)')
+        ax.grid(axis='y', ls='--', alpha=0.4)
+
+        fig.tight_layout()
+        save_path = output_path / f"ml_barplot_accuracy_f1_{duration}s.png"
+        fig.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Saved combined bar plot: {save_path}")
+
+    # Also save a combined bar plot for all durations in one figure
+    durations = sorted(by_duration.keys())
+    if len(durations) >= 1:
+        # For each duration, pick the best model (by F1) and compare binary vs 3class
+        rows = []
+        for duration in durations:
+            mode_dfs = by_duration[duration]
+            if 'binary' in mode_dfs and '3class' in mode_dfs:
+                best_binary = mode_dfs['binary']['f1_mean'].idxmax()
+                best_3class = mode_dfs['3class']['f1_mean'].idxmax()
+                rows.append({
+                    'Duration': f'{duration}s',
+                    'Binary Best Model': best_binary.replace('_', ' ').title(),
+                    'Binary Accuracy': mode_dfs['binary'].loc[best_binary, 'accuracy_mean'],
+                    'Binary F1': mode_dfs['binary'].loc[best_binary, 'f1_mean'],
+                    '3Class Best Model': best_3class.replace('_', ' ').title(),
+                    '3Class Accuracy': mode_dfs['3class'].loc[best_3class, 'accuracy_mean'],
+                    '3Class F1': mode_dfs['3class'].loc[best_3class, 'f1_mean'],
+                })
+
+        if rows:
+            best_df = pd.DataFrame(rows)
+            fig, ax = plt.subplots(figsize=(max(10, len(durations) * 3), 5))
+            x = np.arange(len(durations))
+            width = 0.35
+
+            bars1 = ax.bar(x - width/2, best_df['Binary Accuracy'], width,
+                          label='Binary Accuracy', color='#1976D2', alpha=0.88, edgecolor='black', linewidth=0.6)
+            bars2 = ax.bar(x + width/2, best_df['3Class Accuracy'], width,
+                          label='3-Class Accuracy', color='#FFA000', alpha=0.88, edgecolor='black', linewidth=0.6)
+
+            for bar in bars1:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2, h + 0.005, f'{h:.3f}', ha='center', va='bottom', fontsize=8)
+            for bar in bars2:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2, h + 0.005, f'{h:.3f}', ha='center', va='bottom', fontsize=8)
+
+            ax.set_xticks(x)
+            ax.set_xticklabels([f'{d}s' for d in durations], fontsize=11)
+            ax.set_ylim(0, 1.12)
+            ax.set_ylabel('Accuracy', fontsize=12)
+            ax.set_title('Best Model Accuracy: Binary vs 3-Class by Window Duration',
+                        fontsize=13, fontweight='bold')
+            ax.legend(fontsize=10)
+            ax.grid(axis='y', ls='--', alpha=0.4)
+            fig.tight_layout()
+            save_path = output_path / "ml_best_accuracy_comparison.png"
+            fig.savefig(save_path, dpi=200, bbox_inches='tight')
+            plt.close(fig)
+            print(f"✓ Saved best accuracy comparison: {save_path}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
