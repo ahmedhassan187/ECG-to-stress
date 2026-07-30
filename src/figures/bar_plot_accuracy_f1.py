@@ -98,18 +98,18 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
                 ax.text(bar.get_x() + bar.get_width() / 2,
                         bar.get_height() + 0.005,
                         f'{val:.3f}',
-                        ha='center', va='bottom', fontsize=8, rotation=45)
+                        ha='center', va='bottom', fontsize=10, rotation=45)
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace('_', '\n').title() for m in models],
-                       fontsize=10)
+                       fontsize=12)
     ax.set_ylim(0, 1.12)
-    ax.set_ylabel('Score', fontsize=12)
-    ax.set_xlabel('Model', fontsize=12)
+    ax.set_ylabel('Score', fontsize=14)
+    ax.set_xlabel('Model', fontsize=14)
     ax.set_title('Model Performance Comparison: Binary vs 3-Class\n'
                  '(30s Window Duration, Mean over CV Folds)',
-                 fontsize=13, fontweight='bold')
-    ax.legend(fontsize=8, loc='lower right', ncol=2)
+                 fontsize=15, fontweight='bold')
+    ax.legend(fontsize=10, loc='lower right', ncol=2)
     ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5,
                label='Chance (binary)')
     ax.grid(axis='y', ls='--', alpha=0.4)
