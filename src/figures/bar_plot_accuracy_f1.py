@@ -98,7 +98,7 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
                 ax.text(bar.get_x() + bar.get_width() / 2,
                         bar.get_height() + 0.005,
                         f'{val:.3f}',
-                        ha='center', va='bottom', fontsize=6, rotation=45)
+                        ha='center', va='bottom', fontsize=8, rotation=45)
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace('_', '\n').title() for m in models],
