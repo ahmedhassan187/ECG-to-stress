@@ -59,7 +59,7 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
     x = np.arange(len(models))
     width = 0.13  # Width of each bar (narrower to fit 6 bars)
 
-    fig, ax = plt.subplots(figsize=(16, 6.5))
+    fig, ax = plt.subplots(figsize=(20, 10))
 
     # Bar positions
     positions = {
@@ -98,7 +98,7 @@ def plot_side_by_side_bars(binary, threeclass, output_path):
                 ax.text(bar.get_x() + bar.get_width() / 2,
                         bar.get_height() + 0.005,
                         f'{val:.3f}',
-                        ha='center', va='bottom', fontsize=10, rotation=45)
+                        ha='center', va='bottom', fontsize=15, rotation=45)
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace('_', '\n').title() for m in models],
