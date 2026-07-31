@@ -1504,7 +1504,7 @@ def _plot_model_comparison(summary_df, duration, output_path, suffix=''):
         'F1 Score': ('f1_mean',       'f1_std',       '#388E3C'),
     }
 
-    fig, ax = plt.subplots(figsize=(max(10, len(models) * 1.6), 6))
+    fig, ax = plt.subplots(figsize=(max(14, len(models) * 2), 10))
 
     for i, (label, (mean_col, std_col, color)) in enumerate(metrics.items()):
         offset = (i - len(metrics) / 2 + 0.5) * width
@@ -1518,16 +1518,16 @@ def _plot_model_comparison(summary_df, duration, output_path, suffix=''):
         for bar, m in zip(bars, means):
             ax.text(bar.get_x() + bar.get_width() / 2,
                     bar.get_height() + 0.007,
-                    f'{m:.3f}', ha='center', va='bottom', fontsize=8)
+                    f'{m:.3f}', ha='center', va='bottom', fontsize=15)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([m.replace('_', '\n') for m in models], fontsize=10)
+    ax.set_xticklabels([m.replace('_', '\n') for m in models], fontsize=15)
     ax.set_ylim(0, 1.12)
-    ax.set_ylabel('Score', fontsize=12)
-    ax.set_xlabel('Model', fontsize=12)
+    ax.set_ylabel('Score', fontsize=15)
+    ax.set_xlabel('Model', fontsize=15)
     ax.set_title(f'Model Comparison \u2013 {duration}s Chunks\n(mean ± std over CV folds)',
-                 fontsize=13, fontweight='bold')
-    ax.legend(fontsize=10)
+                 fontsize=15, fontweight='bold')
+    ax.legend(fontsize=15)
     ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5, label='Chance')
     ax.grid(axis='y', ls='--', alpha=0.4)
 
@@ -1855,17 +1855,17 @@ def _plot_combined_bar_plot(all_results_by_duration, output_path):
                 if not np.isnan(val):
                     ax.text(bar.get_x() + bar.get_width() / 2,
                            bar.get_height() + 0.005,
-                           f'{val:.3f}', ha='center', va='bottom', fontsize=7, rotation=45)
+                           f'{val:.3f}', ha='center', va='bottom', fontsize=15, rotation=45)
 
         ax.set_xticks(x)
-        ax.set_xticklabels([m.replace('_', '\n').title() for m in models], fontsize=10)
+        ax.set_xticklabels([m.replace('_', '\n').title() for m in models], fontsize=15)
         ax.set_ylim(0, 1.12)
-        ax.set_ylabel('Score', fontsize=12)
-        ax.set_xlabel('Model', fontsize=12)
+        ax.set_ylabel('Score', fontsize=15)
+        ax.set_xlabel('Model', fontsize=15)
         ax.set_title(f'Model Performance Comparison: Binary vs 3-Class\n'
                      f'({duration}s Window Duration, Mean over CV Folds)',
-                     fontsize=13, fontweight='bold')
-        ax.legend(fontsize=8, loc='lower right', ncol=2)
+                     fontsize=15, fontweight='bold')
+        ax.legend(fontsize=15, loc='lower right', ncol=2)
         ax.axhline(0.5, color='grey', lw=0.8, ls='--', alpha=0.5, label='Chance (binary)')
         ax.grid(axis='y', ls='--', alpha=0.4)
 
