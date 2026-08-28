@@ -1301,6 +1301,7 @@ def run_ml_training(args):
     print(f"📊 Cross-validation folds: {args.cross_val}")
 
     all_results_by_duration = {}  # Collect results across all durations
+    training_samples_by_duration = {}  # Track number of training samples per duration
 
     # Determine which label modes to run
     label_modes_to_run = [args.labels]
@@ -1381,6 +1382,7 @@ def run_ml_training(args):
             y = df['label'].values
             
             print(f"✓ Feature matrix: {X.shape[0]} samples × {X.shape[1]} features")
+            training_samples_by_duration[duration] = X.shape[0]
             # Show class distribution with human-readable names
             class_counts = pd.Series(y).value_counts().sort_index()
             dist_str = ', '.join([f"{current_label_cfg.target_name(int(k))}: {v}" for k, v in class_counts.items()])
