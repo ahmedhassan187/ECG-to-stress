@@ -2,84 +2,113 @@
 
 ## Overview
 
-The `main.py` script provides a command-line interface (CLI) for ECG signal analysis, feature extraction, correlation analysis, and machine learning model training on the WESAD dataset.
+The `main.py` script provides a command-line interface (CLI) for ECG signal analysis, HRV feature extraction, **correlation / reliability analysis across recording durations**, FFT frequency analysis, machine-learning model training, and **prediction on new data** for the paper *"Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification"* (AIMEH conference, WiMoB group).
 
 ## Table of Contents
+
 1. [General Usage](#general-usage)
-2. [Dataset Path Configuration](#dataset-path-configuration)
-3. [Correlation Analysis Command](#correlation-analysis)
-4. [Full Signal Visualization Command](#full-signal-visualization)
-5. [Machine Learning Training Command](#machine-learning-training)
-6. [Examples](#examples)
+2. [Common Options](#common-options)
+3. [Label Schemes](#label-schemes)
+4. [Correlation Analysis Command](#correlation-analysis)
+5. [Full Signal Visualization Command](#full-signal-visualization)
+6. [Machine Learning Training Command](#machine-learning-training)
+7. [FFT Frequency Analysis Command](#fft-frequency-analysis)
+8. [Prediction Mode Command](#prediction-mode)
+9. [Examples](#examples)
+10. [Output Structure](#output-structure)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## General Usage
 
 ### Get Help
+
 ```bash
 # Show main help message
 python src/main.py --help
 python src/main.py -h
-
-# Show help for specific command
-python src/main.py correlation --help
-python src/main.py full --help
-python src/main.py ml --help
 ```
 
 ### Command Structure
+
 ```bash
 python src/main.py <COMMAND> [OPTIONS]
 ```
 
 ---
 
-## Dataset Path Configuration
+## Common Options
 
-The dataset path can be specified with the `-i` / `--input` option. If not provided, it defaults to `data/WESAD` relative to the project root.
+The following options apply to all commands:
+
+| Option | Alias | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
+| `-d` | `--dataset` | int+ | `30 120 300` | Dataset durations in seconds |
+| `-l` | `--labels` | string | `binary` | Label scheme: `binary` or `3class` |
+| `-o` | `--output` | string | varies | Custom output directory |
 
 ```bash
-# Use default dataset path (data/WESAD)
-python src/main.py -c
-
-# Specify custom dataset path (relative)
-python src/main.py -i data/WESAD -c
-
-# Specify custom dataset path (absolute)
-python src/main.py --input /absolute/path/to/WESAD -c
-
-# The -i flag works with all commands
-python src/main.py -i /data/WESAD -f
+# Specify a custom dataset path (works with all commands)
+python src/main.py -i /path/to/WESAD -c
 python src/main.py -i ./my_dataset -m
 ```
 
-The `-i` flag is available as a common option for all three commands (correlation, visualization, ML).
+**Note:** `-f` is reserved for the **Full Signal Visualization** command. To select HRV features in the correlation command use the long flag `--features`.
+
+---
+
+## Label Schemes
+
+WESAD raw labels (1–4) are mapped to target labels via `src/label_config.py`.
+
+| Raw label | Condition |
+|-----------|-----------|
+| 1 | Baseline |
+| 2 | Stress |
+| 3 | Amusement |
+| 4 | Meditation |
+
+### Binary (`-l binary`, default)
+
+- 1 → 0 (No Stress), 2 → 1 (Stress), 3 → 0 (No Stress), 4 → 0 (No Stress)
+
+### Three-class (`-l 3class`)
+
+- 1 → 0 (No Stress / Amusement), 2 → 1 (Stress), 3 → 0 (No Stress / Amusement), 4 → 2 (Meditation)
+
+```bash
+python src/main.py -c -l 3class
+python src/main.py -m -l 3class
+python src/main.py --fft -l 3class
+```
 
 ---
 
 ## Correlation Analysis
 
 ### Command Syntax
+
 ```bash
 python src/main.py -c [OPTIONS]
 python src/main.py --corr [OPTIONS]
-python src/main.py correlation [OPTIONS]
 ```
 
 ### Purpose
-Extracts HRV (Heart Rate Variability) features from ECG signals and generates correlation analysis figures.
+
+Extracts HRV features at each window duration and computes **cross-duration reliability metrics** — Pearson correlation (`r`), Intraclass Correlation Coefficient (ICC 2,1) and Mean Absolute Error (MAE) — between the short windows (e.g., 30 s) and longer recordings (120 s / 300 s). This is the core statistical analysis of the paper.
 
 ### Options
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
-| `-f` | `--features` | string+ | `all` | Features to analyze (space-separated list) |
-| `-d` | `--dataset` | int+ | `30 120 300` | Dataset durations in seconds |
-| `-o` | `--output` | string | `../results/correlation_figures` | Output directory for figures |
+| `--features` | — | string+ | `all` | HRV features to analyze |
+| `--by-condition` | — | flag | off | Also compute metrics separately for each condition group |
+| `-i`, `-d`, `-l`, `-o` | | | | See [Common Options](#common-options) |
 
 ### Available Features
+
 - `mean_rr` - Mean RR interval
 - `mean_hr` - Mean heart rate
 - `sdnn` - Standard deviation of NN intervals
@@ -92,154 +121,215 @@ Extracts HRV (Heart Rate Variability) features from ECG signals and generates co
 ### Examples
 
 ```bash
-# Analyze ALL features for all datasets (30s, 120s, 300s)
+# All features, all durations
 python src/main.py -c
 
-# Analyze specific features for all datasets
-python src/main.py -c -f mean_rr mean_hr sdnn
+# Specific features for specific durations
+python src/main.py -c --features mean_rr mean_hr sdnn -d 30 120
 
-# Analyze all features for specific dataset durations
-python src/main.py -c -d 30 120
+# Split metrics by stress / non-stress condition
+python src/main.py -c --by-condition
 
-# Analyze specific features for specific durations
-python src/main.py -c -f mean_rr rmssd -d 30 300
+# Custom output directory
+python src/main.py -c -o ./my_results
 
-# Save results to custom output directory
-python src/main.py -c -o ./my_correlation_results
-
-# Use custom dataset path
+# Custom dataset path
 python src/main.py -i /path/to/WESAD -c
 ```
+
+### Outputs
+
+Written to `../results/correlation_figures/` (or `-o`):
+
+- `cross_duration_comparison.csv` — one row per (small, large) duration pair and feature with `r`, `icc`, `mae`, `n`
+- `comparison_table_r.csv`, `comparison_table_icc.csv`, `comparison_table_mae.csv` — N×N pairwise tables per metric
+- Heatmaps (`comparison_r_heatmap.png`, ...), per-comparison and per-feature bar charts
+- Styled metric summary tables and feature bar charts
 
 ---
 
 ## Full Signal Visualization
 
 ### Command Syntax
+
 ```bash
 python src/main.py -f [OPTIONS]
 python src/main.py --full [OPTIONS]
-python src/main.py full [OPTIONS]
 ```
 
 ### Purpose
-Plots the complete ECG signals with adjustable chunk size for visualization. Displays signal segments with label-based coloring.
+
+Plots ECG signals with label-aware coloring and an adjustable chunk size (points per plot).
 
 ### Options
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
-| `-p` | `--points` | int | `5000` | Number of points per plot chunk |
-| `-s` | `--subjects` | int+ | None (all) | Specific subject IDs to plot |
-| `-o` | `--output` | string | `../results/signal_plots` | Output directory for plots |
+| `-p` | `--points` | int | `5000` | Points per plot chunk |
+| `-s` | `--subjects` | int+ | all | Subject IDs to plot |
+| `-i`, `-o` | | | | Dataset path / output dir |
 
 ### Examples
 
 ```bash
-# Plot all subjects with default 5000 points per chunk
+# Default: 5000 points per chunk, all subjects
 python src/main.py -f
 
-# Plot all subjects with 10000 points per chunk (larger segments)
-python src/main.py -f -p 10000
+# Custom chunk size / subjects
+python src/main.py -f -p 10000 -s 0 1 2
 
-# Plot all subjects with 2000 points per chunk (smaller segments)
-python src/main.py --full -p 2000
-
-# Plot only subjects 0, 1, 2 with default chunk size
-python src/main.py -f -s 0 1 2
-
-# Plot subjects 0, 3, 5 with custom chunk size
-python src/main.py -f -s 0 3 5 -p 8000
-
-# Save results to custom directory
-python src/main.py -f -o ./my_signal_plots -p 7500
-
-# Use custom dataset path
-python src/main.py -i /path/to/WESAD -f
+# Custom output
+python src/main.py -f -p 7500 -o ./plots
 ```
 
-### Point Recommendations
-- **2000-5000**: High detail, many plots per signal
-- **5000-10000**: Balanced detail and overview
-- **10000+**: Large segments, fewer plots
+**Point Size Guidelines:** 2000–5000 (high detail), 5000–10000 (balanced), 10000+ (overview).
+
+### Outputs
+
+PNG files in `../results/signal_plots/` colored by label.
 
 ---
 
 ## Machine Learning Training
 
 ### Command Syntax
+
 ```bash
 python src/main.py -m [OPTIONS]
 python src/main.py --ml [OPTIONS]
-python src/main.py ml [OPTIONS]
 ```
 
 ### Purpose
-Trains machine learning models on ECG chunks using 5-fold stratified cross-validation. Supports multiple models and dataset durations.
+
+Trains **7 classifiers** with stratified k-fold cross-validation (default 5 folds) on ECG chunks. Trained models and metadata are saved as `.pkl` files for later use in prediction mode.
 
 ### Options
 
 | Option | Alias | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `-i` | `--input` | string | `data/WESAD` | Path to the WESAD dataset directory |
-| `-d` | `--dataset` | int+ | `30 120 300` | Dataset durations in seconds |
-| `-mo` | `--models` | string+ | (all 7) | Models to train (space-separated) |
+| `-mo` | `--models` | string+ | all 7 | Models to train |
 | `-cv` | `--cross-val` | int | `5` | Number of CV folds |
-| `-o` | `--output` | string | `../results/ml_results` | Output directory |
+| `-i`, `-d`, `-l`, `-o` | | | | See [Common Options](#common-options) |
 
-### Available Models
-- `knn` - K-Nearest Neighbors
-- `svm` - Support Vector Machine
-- `decision_tree` - Decision Tree Classifier
-- `random_forest` - Random Forest
-- `gradient_boosting` - Gradient Boosting
-- `logistic_regression` - Logistic Regression
-- `xgboost` - XGBoost Classifier
+### Models
+
+`knn`, `svm`, `decision_tree`, `random_forest`, `gradient_boosting`, `logistic_regression`, `xgboost`
 
 ### Examples
 
 ```bash
-# Train ALL models on ALL datasets (30s, 120s, 300s)
+# All models, all durations
 python src/main.py -m
 
-# Train all models on specific datasets (30s, 120s only)
-python src/main.py -m -d 30 120
+# Specific durations / models
+python src/main.py -m -d 30 120 -mo knn svm xgboost
 
-# Train specific models on all datasets
-python src/main.py -m -mo knn svm xgboost
-
-# Train specific models on specific datasets
-python src/main.py -m -d 30 -mo random_forest gradient_boosting
-
-# Train on 300s dataset with Random Forest and XGBoost
-python src/main.py -m -d 300 -mo random_forest xgboost
-
-# Change number of CV folds (10-fold cross-validation)
-python src/main.py -m -cv 10
-
-# Custom CV folds and models
-python src/main.py -m -cv 10 -mo knn svm decision_tree
-
-# Save results to custom directory
-python src/main.py -m -o ./my_ml_results
-
-# Use custom dataset path
-python src/main.py -i /path/to/WESAD -m
+# Custom CV folds / 3-class
+python src/main.py -m -d 30 -cv 10 -l 3class
 ```
 
-### Classification Task
-- **Binary Classification**: Stress vs. No-Stress
-  - No-Stress: Labels 1 (Baseline), 3 (Meditation)
-  - Stress: Labels 2 (Amusement), 4 (Stress)
+### Outputs
 
-### Output Files
-- `cv_results_30s.csv` - Cross-validation metrics for 30s chunks
-- `cv_results_120s.csv` - Cross-validation metrics for 120s chunks
-- `cv_results_300s.csv` - Cross-validation metrics for 300s chunks
-- `cv_summary_all_results.csv` - Comprehensive summary
-- Individual model comparison plots (PNG)
-- Heatmaps and line plots with error bars
+- `../results/ml_results/ml_results_<duration>s_<mode>.csv` — per-model accuracy, F1, precision, recall, AUC (mean ± std across folds)
+- `../results/ml_results/saved_models/<model>_<duration>s_<mode>.pkl` and `.meta.pkl` (features, label mapping, duration, CV summary)
+
+---
+
+## FFT Frequency Analysis
+
+### Command Syntax
+
+```bash
+python src/main.py --fft [OPTIONS]
+```
+
+### Purpose
+
+Computes the FFT of every ECG chunk at each duration, plots mean spectra per class (with LF / HF bands), overlays all durations, and compares spectra using **cosine similarity** — cross-class (stress ↔ non-stress) and within-class.
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--fft-max-pairs` | int | `500` | Max random pairs per comparison for cosine similarity |
+| `--fft-freq-max` | float | `40.0` | Max frequency (Hz) to plot |
+| `-d`, `-l`, `-i`, `-o` | | | See [Common Options](#common-options) |
+
+### Examples
+
+```bash
+# All durations
+python src/main.py --fft
+
+# Specific durations, more pairs
+python src/main.py --fft -d 30 120 --fft-max-pairs 1000
+
+# 3-class FFT analysis
+python src/main.py --fft -l 3class
+```
+
+### Outputs
+
+- `fft_spectra_all_durations.png`, `fft_overlay_durations.png`
+- `fft_cosine_similarity_distributions.png` (KDE grids per duration × comparison)
+- `fft_cosine_summary.csv`, `fft_cosine_summary_bar.png`
+
+---
+
+## Prediction Mode
+
+### Command Syntax
+
+```bash
+python src/main.py --predict [OPTIONS]
+```
+
+### Purpose
+
+Loads saved models (`.pkl`) and predicts stress labels on new data. Three input modes are supported:
+
+| Mode | Flag | Description |
+|------|------|-------------|
+| **WESAD dataset** (default) | *(none)* | Uses subject 0 of the WESAD dataset as test data |
+| **Pavia HRV** | `--pavia` | Loads `pavia_features.csv` / `pavia_labels.csv` (from `data/` or a custom folder) |
+| **Custom CSV** | `--test-data` / `--test-labels` | CSV files with (optionally) a `label` column |
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model-dir` | string | `../results/ml_results/saved_models` | Directory with trained models |
+| `--pavia` | string (optional) | `default` | Pavia data folder (default: `data/`) |
+| `--test-data` | string | — | Test features CSV |
+| `--test-labels` | string | — | Test labels CSV |
+| `-d`, `-l`, `-i`, `-o` | | | See [Common Options](#common-options) |
+
+### Examples
+
+```bash
+# Default: WESAD subject 0 as test data, 30s models (default)
+python src/main.py --predict
+
+# Specific duration
+python src/main.py --predict -d 30
+
+# Pavia HRV data (default folder)
+python src/main.py --predict --pavia
+
+# Pavia HRV data (custom folder)
+python src/main.py --predict --pavia /custom/path
+
+# Custom CSV test data
+python src/main.py --predict --test-data test_features.csv --test-labels test_labels.csv
+
+# Custom model directory
+python src/main.py --predict --model-dir results/ml_results/saved_models
+```
+
+### Outputs
+
+- `predictions_<duration>s.csv` — features + true labels + per-model prediction columns
+- `prediction_metrics_<duration>s.png` and `prediction_comparison_<duration>s.png`
 
 ---
 
@@ -248,8 +338,8 @@ python src/main.py -i /path/to/WESAD -m
 ### Complete Analysis Pipeline
 
 ```bash
-# 1. First, analyze correlations to understand feature relationships
-python src/main.py -c -f mean_rr mean_hr sdnn rmssd -d 30 120 300
+# 1. Reliability / correlation analysis across durations
+python src/main.py -c -d 30 120 300
 
 # 2. Visualize the raw signals to inspect data quality
 python src/main.py -f -p 5000 -s 0 1 2
@@ -260,33 +350,11 @@ python src/main.py -m -d 30
 # 4. Compare performance across durations
 python src/main.py -m
 
-# 5. Fine-tune best performers
-python src/main.py -m -d 30 -mo random_forest gradient_boosting -cv 10
-```
+# 5. FFT frequency analysis
+python src/main.py --fft
 
-### Specific Use Cases
-
-**Quick Overview:**
-```bash
-python src/main.py --help
-python src/main.py -c
-python src/main.py -f -p 5000
-python src/main.py -m -d 30 -mo knn svm
-```
-
-**Detailed Analysis:**
-```bash
-python src/main.py -c -f mean_rr mean_hr sdnn rmssd pnn50 -d 30 120 300
-python src/main.py -f -p 2500 -s 0 1 2 3 4
-python src/main.py -m -cv 10 -mo random_forest gradient_boosting xgboost
-```
-
-**Full Feature Extraction:**
-```bash
-# Extract all features, visualize all signals, train all models
-python src/main.py -c
-python src/main.py -f
-python src/main.py -m
+# 6. Validate on Pavia data with trained models
+python src/main.py --predict --pavia
 ```
 
 ---
@@ -296,73 +364,87 @@ python src/main.py -m
 ```
 results/
 ├── correlation_figures/
-│   ├── features_30s.csv
-│   ├── features_120s.csv
-│   ├── features_300s.csv
-│   └── [correlation plots]
+│   ├── cross_duration_comparison.csv
+│   ├── comparison_table_{r|icc|mae}.csv
+│   ├── comparison_{r|icc|mae}_heatmap.png
+│   └── [styled tables, bar charts]
 │
 ├── signal_plots/
 │   ├── subject_00_ecg.png
-│   ├── subject_01_ecg.png
 │   └── ...
 │
-└── ml_results/
-    ├── cv_results_30s.csv
-    ├── cv_results_120s.csv
-    ├── cv_results_300s.csv
-    ├── cv_summary_all_results.csv
-    └── [model comparison plots]
+├── ml_results/
+│   ├── ml_results_30s_binary.csv
+│   ├── ml_results_30s_3class.csv
+│   ├── saved_models/*.pkl
+│   └── [comparison plots]
+│
+├── fft_analysis/
+│   ├── fft_spectra_all_durations.png
+│   ├── fft_cosine_summary.csv
+│   └── ...
+│
+└── predictions/
+    ├── predictions_30s.csv
+    └── prediction_metrics_30s.png
 ```
 
 ---
 
 ## Performance Notes
 
-- **30s chunks**: ~196 samples per subject (fastest training)
-- **120s chunks**: ~49 samples per subject (balanced)
-- **300s chunks**: ~19 samples per subject (most data per chunk, slowest)
+- **30s chunks**: ~1491 samples (fastest training, most chunks)
+- **120s chunks**: ~369 samples (balanced)
+- **300s chunks**: ~144 samples (fewest chunks)
 
 ### Model Training Times (Approximate)
-- KNN: Very fast
-- Logistic Regression: Very fast
-- Decision Tree: Fast
-- SVM: Medium
-- Random Forest: Medium
-- Gradient Boosting: Slow
-- XGBoost: Slow
+
+- KNN / Logistic Regression: very fast
+- Decision Tree: fast
+- SVM / Random Forest: medium
+- Gradient Boosting / XGBoost: slow
 
 ---
 
 ## Troubleshooting
 
 ### "Module not found" errors
+
 Ensure you're running from the project root:
+
 ```bash
 cd g:\Master\Thesis\FLT\Code\ECG-to-stress
 python src/main.py -m
 ```
 
 ### "Dataset not found" errors
-Verify WESAD data structure or specify the correct path with `-i`:
-```bash
-# Using default path
-data/WESAD/
-├── S2/
-│   └── S2.pkl
-├── S3/
-│   └── S3.pkl
-└── ...
 
-# Or specify a custom path
-python src/main.py -i /path/to/your/dataset -c
+Verify WESAD data structure or specify the correct path with `-i`:
+
+```bash
+# Default structure
+data/WESAD/
+├── S2/S2.pkl
+├── S3/S3.pkl
+└── ...
+```
+
+### "Model not found" during prediction
+
+Train (and save) the models first:
+
+```bash
+python src/main.py -m -d 30 -mo knn svm
+python src/main.py --predict -d 30 --pavia
 ```
 
 ### Out of memory errors
-Reduce dataset size or use smaller chunk sizes:
+
+Reduce the number of durations or models:
+
 ```bash
-python src/main.py -c -d 30  # Smaller chunks
-python src/main.py -f -p 10000  # Larger visualization chunks
-python src/main.py -m -d 300 -mo knn svm  # Fewer models
+python src/main.py -c -d 30
+python src/main.py -m -d 300 -mo knn svm
 ```
 
 ---
@@ -370,7 +452,7 @@ python src/main.py -m -d 300 -mo knn svm  # Fewer models
 ## Additional Notes
 
 - All commands support relative and absolute output paths
-- Default dataset includes all available subjects
 - Cross-validation is stratified to maintain class balance
-- Binary stress classification: {1,3}→0 (No-Stress), {2,4}→1 (Stress)
+- Default binary mapping: Stress (label 2) vs. No Stress (labels 1, 3, 4)
 - Sampling frequency: 700 Hz (WESAD standard)
+- XGBoost is optional; missing it simply skips that model

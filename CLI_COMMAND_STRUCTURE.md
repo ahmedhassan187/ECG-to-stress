@@ -1,5 +1,7 @@
 # CLI Command Structure Diagram
 
+> Supporting the paper **"Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification"** (AIMEH conference, WiMoB group).
+
 ## Command Hierarchy
 
 ```
@@ -11,67 +13,92 @@ python src/main.py
 ├─ CORRELATION (-c / --corr)
 │  ├─ -i / --input [path]
 │  │  └─ Default: data/WESAD
-│  │
-│  ├─ -f / --features [feature1 feature2 ...]
+│  ├─ --features [feature1 feature2 ...]
 │  │  └─ Options: mean_rr, mean_hr, sdnn, rmssd, pnn50, lf_power, hf_power, lf_hf_ratio
 │  │  └─ Default: all
-│  │
 │  ├─ -d / --dataset [30 120 300]
 │  │  └─ Default: 30 120 300 (all)
-│  │
+│  ├─ -l / --labels [binary | 3class]
+│  │  └─ Default: binary
+│  ├─ --by-condition
+│  │  └─ Compute metrics separately per condition group
 │  └─ -o / --output [path]
-│     └─ Default: ../results/correlation_figures
+│     └─ Default: results/correlation_figures
 │
 ├─ FULL SIGNAL (-f / --full)
 │  ├─ -i / --input [path]
 │  │  └─ Default: data/WESAD
-│  │
 │  ├─ -p / --points [int]
 │  │  └─ Range: 2000-15000
 │  │  └─ Default: 5000
-│  │
 │  ├─ -s / --subjects [0 1 2 ...]
 │  │  └─ Default: all subjects
-│  │
 │  └─ -o / --output [path]
-│     └─ Default: ../results/signal_plots
+│     └─ Default: results/signal_plots
 │
-└─ MACHINE LEARNING (-m / --ml)
-   ├─ -i / --input [path]
-   │  └─ Default: data/WESAD
-   │
+├─ MACHINE LEARNING (-m / --ml)
+│  ├─ -i / --input [path]
+│  │  └─ Default: data/WESAD
+│  ├─ -d / --dataset [30 120 300]
+│  │  └─ Default: 30 120 300 (all)
+│  ├─ -mo / --models [model1 model2 ...]
+│  │  └─ Options: knn, svm, decision_tree, random_forest, gradient_boosting, logistic_regression, xgboost
+│  │  └─ Default: all 7 models
+│  ├─ -cv / --cross-val [int]
+│  │  └─ Default: 5
+│  ├─ -l / --labels [binary | 3class]
+│  │  └─ Default: binary
+│  └─ -o / --output [path]
+│     └─ Default: results/ml_results
+│
+├─ FFT ANALYSIS (--fft)
+│  ├─ -d / --dataset [30 120 300]
+│  │  └─ Default: 30 120 300 (all)
+│  ├─ -l / --labels [binary | 3class]
+│  │  └─ Default: binary
+│  ├─ --fft-max-pairs [int]
+│  │  └─ Default: 500
+│  ├─ --fft-freq-max [float]
+│  │  └─ Default: 40.0
+│  └─ -o / --output [path]
+│     └─ Default: results/fft_analysis
+│
+└─ PREDICTION (--predict)
+   ├─ --model-dir [path]
+   │  └─ Default: results/ml_results/saved_models
    ├─ -d / --dataset [30 120 300]
-   │  └─ Default: 30 120 300 (all)
-   │
-   ├─ -mo / --models [model1 model2 ...]
-   │  └─ Options: knn, svm, decision_tree, random_forest, gradient_boosting, logistic_regression, xgboost
-   │  └─ Default: all 7 models
-   │
-   ├─ -cv / --cross-val [int]
-   │  └─ Default: 5
-   │
+   │  └─ Default: [30] (overridden if specified)
+   ├─ --pavia [path | default]
+   │  └─ Use Pavia HRV data (default folder: data/)
+   ├─ --test-data [path]
+   │  └─ Test features CSV
+   ├─ --test-labels [path]
+   │  └─ Test labels CSV
+   ├─ -l / --labels [binary | 3class]
+   │  └─ Default: binary
    └─ -o / --output [path]
-      └─ Default: ../results/ml_results
+      └─ Default: results/predictions
 ```
 
 ---
 
 ## Quick Command Reference
 
-### One-Liners
-
 | Task | Command |
 |------|---------|
 | Help | `python src/main.py --help` |
-| Correlations (all) | `python src/main.py -c` |
-| Correlations (specific) | `python src/main.py -c -f mean_rr mean_hr -d 30` |
-| Correlations (custom path) | `python src/main.py -i /path/to/data -c` |
+| Correlation / reliability (all) | `python src/main.py -c` |
+| Correlation (specific) | `python src/main.py -c --features mean_rr mean_hr -d 30` |
+| Correlation (custom path) | `python src/main.py -i /path/to/data -c` |
 | Visualizations (default) | `python src/main.py -f` |
 | Visualizations (custom) | `python src/main.py -f -p 8000 -s 0 1 2` |
-| Visualizations (custom path) | `python src/main.py -i /path/to/data -f` |
 | ML (all) | `python src/main.py -m` |
-| ML (custom) | `python src/main.py -m -d 30 -mo knn svm xgboost` |
-| ML (custom path) | `python src/main.py -i /path/to/data -m` |
+| ML (custom) | `python src/main.py -m -d 30 -mo knn svm xgboost -cv 10` |
+| ML (3-class) | `python src/main.py -m -l 3class` |
+| FFT (all) | `python src/main.py --fft` |
+| FFT (custom) | `python src/main.py --fft -d 30 120 --fft-max-pairs 1000` |
+| Predict (Pavia) | `python src/main.py --predict --pavia` |
+| Predict (custom CSV) | `python src/main.py --predict --test-data t.csv --test-labels t_lab.csv` |
 
 ---
 
@@ -80,104 +107,48 @@ python src/main.py
 ```
 ECG DATASET (WESAD)
         │
-        ├─────────────────────┬──────────────────────┬─────────────────
-        │                     │                      │
-        ▼                     ▼                      ▼
-   ┌─────────────┐    ┌──────────────┐    ┌──────────────────┐
-   │ CORRELATION │    │ VISUALIZATION│    │ ML TRAINING      │
-   └─────────────┘    └──────────────┘    └──────────────────┘
-        │                     │                      │
-        │ 1. Extract HRV      │ 1. Load Signal      │ 1. Extract HRV
-        │    Features         │ 2. Create Chunks   │    Features
-        │ 2. Analyze          │    (adjustable)     │ 2. Normalize
-        │    Correlations     │ 3. Plot with        │ 3. Split/Cross-Val
-        │ 3. Generate         │    Labels           │ 4. Train Models
-        │    Figures          │ 4. Export PNG       │ 5. Evaluate
-        │                     │                     │
-        ▼                     ▼                     ▼
-   ┌─────────────┐    ┌──────────────┐    ┌──────────────────┐
-   │ CSV + Plots │    │ PNG Files    │    │ CSV + Plots      │
-   │ (Features)  │    │ (Signals)    │    │ (Metrics)        │
-   └─────────────┘    └──────────────┘    └──────────────────┘
+        ├──────────────────────┬──────────────────────┬─────────────────┬────────────
+        │                      │                      │                 │
+        ▼                      ▼                      ▼                 ▼
+   ┌──────────────┐     ┌──────────────┐     ┌─────────────────┐  ┌─────────────┐
+   │ CORRELATION  │     │ VISUALIZATION│     │ ML TRAINING     │  │ FFT ANALYSIS│
+   │ RELIABILITY  │     └──────────────┘     └─────────────────┘  └─────────────┘
+   └──────────────┘              │                     │                 │
+        │                        │                     │                 │
+        │ 1. Extract HRV         │ 1. Load Signal      │ 1. Extract HRV  │ 1. Extract
+        │    Features            │ 2. Create Chunks    │    Features     │    chunks
+        │ 2. Pair small/large    │ 3. Plot with        │ 2. Normalize    │ 2. FFT each
+        │    windows             │    Labels           │ 3. k-fold / LOSO│ 3. Mean spectra
+        │ 3. Compute r/ICC/MAE   │ 4. Export PNG       │ 4. Train Models │ 4. Cosine sim
+        │ 4. Export tables/plots │                     │ 5. Save .pkl    │    cross/within
+        │                        │                     │                 │
+        ▼                        ▼                     ▼                 ▼
+   ┌─────────────┐         ┌──────────────┐      ┌────────────────┐  ┌───────────────┐
+   │CSV + Plots  │         │ PNG Files    │      │CSV + Saved      │  │CSV + Plots    │
+   │(r,ICC,MAE)  │         │(Signals)     │      │Models (.pkl)    │  │(Spectra, Cos)│
+   └─────────────┘         └──────────────┘      └────────────────┘  └───────────────┘
+        │                                                            │
+        └────────────────────── PREDICTION (--predict) ──────────────┘
+                                │ loads saved models +
+                                │ test data (WESAD / Pavia / CSV)
+                                ▼
+                          ┌──────────────┐
+                          │Predictions + │
+                          │metrics plots │
+                          └──────────────┘
 ```
 
 ---
 
-## Example Command Chains
+## Label Flow
 
-### Chain 1: Complete Analysis
-```bash
-# Step 1: Understand feature relationships
-python src/main.py -c -f mean_rr mean_hr sdnn rmssd -d 30 120 300
-
-# Step 2: Inspect raw signals
-python src/main.py -f -p 5000
-
-# Step 3: Train models
-python src/main.py -m
 ```
+WESAD raw labels (1–4):
+  1 Baseline · 2 Stress · 3 Amusement · 4 Meditation
 
-### Chain 2: Focused Investigation
-```bash
-# Only analyze 30s chunks with specific models
-python src/main.py -m -d 30 -mo random_forest gradient_boosting xgboost
-
-# Visualize those signals
-python src/main.py -f -p 5000
-
-# Analyze specific features for that duration
-python src/main.py -c -f sdnn rmssd -d 30
+Binary (-l binary, default):   1→0  2→1  3→0  4→0   → {No Stress, Stress}
+3-class (-l 3class):           1→0  2→1  3→0  4→2   → {No Stress/Amusement, Stress, Meditation}
 ```
-
-### Chain 3: Performance Optimization
-```bash
-# Quick test with few models
-python src/main.py -m -d 30 -mo knn svm
-
-# Compare visualization chunk sizes
-python src/main.py -f -p 3000
-python src/main.py -f -p 5000
-python src/main.py -f -p 10000
-
-# Deep analysis of best features
-python src/main.py -c -f mean_rr sdnn rmssd lf_power hf_power
-```
-
----
-
-## Argument Patterns
-
-### Pattern 1: Minimal (Use Defaults)
-```bash
-python src/main.py -c
-python src/main.py -f
-python src/main.py -m
-```
-**Result:** All features, all durations, all subjects, all models, default parameters
-
-### Pattern 2: Specific Values
-```bash
-python src/main.py -c -f mean_rr mean_hr
-python src/main.py -f -p 10000
-python src/main.py -m -mo knn svm
-```
-**Result:** Specific features/models/parameters only
-
-### Pattern 3: Partial Specification
-```bash
-python src/main.py -c -d 30
-python src/main.py -m -d 30 -mo random_forest
-```
-**Result:** Mix of specific and default values
-
-### Pattern 4: Complete Control
-```bash
-python src/main.py -c -f mean_rr sdnn -d 30 120 -o ./my_results
-python src/main.py -f -p 8000 -s 0 1 2 -o ./signals
-python src/main.py -m -d 30 -mo knn svm -cv 10 -o ./ml
-python src/main.py -i /path/to/WESAD -c -f mean_rr -d 30
-```
-**Result:** Fully customized behavior with custom output paths
 
 ---
 
@@ -186,17 +157,25 @@ python src/main.py -i /path/to/WESAD -c -f mean_rr -d 30
 ```
 What do you want to do?
 │
-├─ "Understand feature relationships?"
+├─ "How reliable are HRV features across recording durations?"
 │  └─ USE: python src/main.py -c [options]
-│     └─ Generates correlation analysis
+│     └─ Generates cross-duration r / ICC / MAE analysis
 │
 ├─ "Inspect the raw ECG signals?"
 │  └─ USE: python src/main.py -f [options]
 │     └─ Creates visualization plots
 │
-├─ "Train and evaluate models?"
+├─ "Train and evaluate stress classifiers?"
 │  └─ USE: python src/main.py -m [options]
-│     └─ Performs ML training with CV
+│     └─ Performs ML training with CV and saves models
+│
+├─ "Analyze frequency content / class separability?"
+│  └─ USE: python src/main.py --fft [options]
+│     └─ FFT spectra + cosine similarity
+│
+├─ "Predict stress on new data (Pavia / CSV / WESAD)?"
+│  └─ USE: python src/main.py --predict [options]
+│     └─ Uses saved models
 │
 └─ "Not sure where to start?"
    └─ RUN: python src/main.py --help
@@ -208,16 +187,17 @@ What do you want to do?
 ## Parameter Combinations
 
 ### For Correlation Analysis
+
 ```
-Features × Durations = Total Analyses
+Features × Duration-pairs = Total Analyses
 
 Examples:
-- 1 feature  × 1 duration  = 1 analysis
-- 3 features × 1 duration  = 3 analyses
-- 8 features × 3 durations = 24 analyses (all)
+- 1 feature  × 1 pair (30s vs 120s) = 1 analysis
+- 8 features × 2 pairs (30-120, 30-300) = 16 analyses (all)
 ```
 
 ### For Visualization
+
 ```
 Chunk Size Options:
 - 2000 points  = 7-8 plots per subject (high detail)
@@ -226,71 +206,63 @@ Chunk Size Options:
 ```
 
 ### For ML Training
+
 ```
 Models × Durations × CV Folds = Total CV Runs
 
 Examples:
-- 1 model  × 1 duration  × 5 folds = 5 CV runs
-- 3 models × 2 durations × 10 folds = 60 CV runs
-- 7 models × 3 durations × 5 folds = 105 CV runs (all)
+- 1 model  × 1 duration  × 5 folds  = 5 CV runs
+- 7 models × 3 durations × 5 folds  = 105 CV runs (all)
+```
+
+### For FFT
+
+```
+Durations × Comparison Types (cross/within-stress/within-non-stress)
 ```
 
 ---
 
-## Performance Expectations
+## Output Directories
 
-### Processing Time (Approximate)
-
-| Command | Dataset | Time |
-|---------|---------|------|
-| `-c` (correlation) | 30s | < 5 seconds |
-| `-c` (correlation) | 120s | < 5 seconds |
-| `-c` (correlation) | 300s | < 5 seconds |
-| `-f` (visualization) | 1 subject, 5000pts | 1-2 seconds |
-| `-f` (visualization) | All subjects | 10-20 seconds |
-| `-m` (ML, 1 model) | 30s, 5-fold | 5-10 seconds |
-| `-m` (ML, 7 models) | All, 5-fold | 60-120 seconds |
-
-### Output File Sizes (Approximate)
-
-| Output | Size |
-|--------|------|
-| CSV per dataset | 50-500 KB |
-| PNG plot per subject | 100-500 KB |
-| Summary CSV | 10-50 KB |
+| Command | Default Output |
+|---------|----------------|
+| `-c` | `results/correlation_figures/` |
+| `-f` | `results/signal_plots/` |
+| `-m` | `results/ml_results/` (with `saved_models/`) |
+| `--fft` | `results/fft_analysis/` |
+| `--predict` | `results/predictions/` |
 
 ---
 
 ## Tips & Tricks
 
 ### Tip 1: Start Simple
+
 ```bash
-# Good starting point
 python src/main.py -c
-python src/main.py -f -p 5000
-python src/main.py -m -d 30
+python src/main.py -f
+python src/main.py -m -d 30 -mo knn
 ```
 
-### Tip 2: Test Before Full Run
-```bash
-# Quick test with 1 model
-python src/main.py -m -d 30 -mo knn
+### Tip 2: For Prediction, Train Models First
 
-# Then run full if satisfied
-python src/main.py -m
+```bash
+python src/main.py -m -d 30 -mo knn svm random_forest
+python src/main.py --predict -d 30 --pavia
 ```
 
 ### Tip 3: Organize Outputs
+
 ```bash
-python src/main.py -c -o ./results/correlation
-python src/main.py -f -o ./results/visualization
+python src/main.py -c -o ./results/rel
 python src/main.py -m -o ./results/ml
+python src/main.py --fft -o ./results/fft
+python src/main.py --predict -o ./results/pred
 ```
 
 ### Tip 4: Combine with Piping
-```bash
-# Run analysis and save log
-python src/main.py -m -d 30 > ml_training.log 2>&1
 
-# Run multiple analyses sequentially
-python src/main.py -c && python src/main.py -f && python src/main.py -m
+```bash
+python src/main.py -m -d 30 > ml_training.log 2>&1
+```

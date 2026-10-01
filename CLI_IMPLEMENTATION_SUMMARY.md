@@ -1,261 +1,167 @@
 # CLI Interface Implementation Summary
 
+> Supporting the paper **"Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification"** (AIMEH conference, WiMoB group).
+
 ## ✅ What's Been Created
 
-I've implemented a comprehensive command-line interface (CLI) for your ECG-to-Stress analysis project. The CLI provides easy access to all major functionality through simple commands.
+A comprehensive command-line interface (CLI) for the ECG-to-Stress project. The CLI provides easy access to all analysis functionality — correlation / reliability analysis, signal visualization, machine learning training, FFT analysis, and prediction — through simple commands.
 
 ---
 
-## 📋 Three Main Commands
+## 🔧 Five Main Commands
 
-### 1. **Correlation Analysis** (`-c` / `--corr`)
-Extract HRV features and generate correlation analysis figures.
+### 1. Correlation / Reliability Analysis (`-c` / `--corr`)
+
+Extracts HRV features at each window duration and computes **cross-duration reliability metrics** (Pearson `r`, ICC, MAE).
 
 ```bash
 # Default: all features, all durations
 python src/main.py -c
 
-# Custom features
-python src/main.py -c -f mean_rr mean_hr sdnn rmssd
+# Custom features / durations
+python src/main.py -c --features mean_rr mean_hr sdnn -d 30 120
 
-# Custom durations
-python src/main.py -c -d 30 120
-
-# Both custom
-python src/main.py -c -f mean_rr -d 30 120 -o ./results
+# Metrics split by condition group
+python src/main.py -c --by-condition
 
 # Custom dataset path
 python src/main.py -i /path/to/WESAD -c
 ```
 
 **Key Options:**
-- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
-- `-f / --features`: Specify which HRV features to analyze (default: all)
-- `-d / --dataset`: Specify dataset durations in seconds (default: 30 120 300)
-- `-o / --output`: Custom output directory
+- `--features`: HRV features to analyze (`all` or a subset)
+- `--by-condition`: compute metrics separately for stress / non-stress
+- `-d / --dataset`: durations (default: `30 120 300`)
+- `-l / --labels`: `binary` or `3class`
 
-**Available Features:**
-- `mean_rr` - Mean RR interval
-- `mean_hr` - Mean heart rate
-- `sdnn` - Standard deviation of NN intervals
-- `rmssd` - Root mean square of successive differences
-- `pnn50` - Percentage of NN50 count
-- `lf_power` - Low frequency power
-- `hf_power` - High frequency power
-- `lf_hf_ratio` - LF/HF ratio
+**Available Features (8):**
+`mean_rr`, `mean_hr`, `sdnn`, `rmssd`, `pnn50`, `lf_power`, `hf_power`, `lf_hf_ratio`
 
----
+### 2. Full Signal Visualization (`-f` / `--full`)
 
-### 2. **Full Signal Visualization** (`-f` / `--full`)
 Plot complete ECG signals with adjustable chunk size.
 
 ```bash
-# Default: 5000 points per chunk
-python src/main.py -f
+python src/main.py -f                                # Default: 5000 points
+python src/main.py -f -p 10000 -s 0 1 2              # Custom points / subjects
+python src/main.py -i /path/to/WESAD -f              # Custom dataset path
+```
 
-# Larger chunks (less detail, fewer plots)
-python src/main.py -f -p 10000
+**Key Options:** `-p / --points` (default `5000`), `-s / --subjects` (default: all)
 
-# Smaller chunks (more detail, more plots)
-python src/main.py -f -p 2000
+### 3. Machine Learning Training (`-m` / `--ml`)
 
-# Specific subjects
-python src/main.py -f -s 0 1 2
+Trains ML models with cross-validation and saves them for prediction.
 
-# Custom combination
-python src/main.py -f -p 8000 -s 0 3 5 -o ./my_plots
-
-# Custom dataset path
-python src/main.py -i /path/to/WESAD -f
+```bash
+python src/main.py -m                                # All models, all durations
+python src/main.py -m -d 30 -mo knn svm              # Specific duration / models
+python src/main.py -m -cv 10 -l 3class               # 10-fold, 3-class
 ```
 
 **Key Options:**
-- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
-- `-p / --points`: Adjust chunk size (points per plot) (default: 5000)
-- `-s / --subjects`: Specify subject IDs to plot (default: all)
-- `-o / --output`: Custom output directory
+- `-mo / --models`: choose from 7 models
+- `-cv / --cross-val`: number of CV folds (default `5`)
+- `-l / --labels`: `binary` or `3class`
 
-**Point Size Guidelines:**
-- 2000-5000: High detail visualization
-- 5000-10000: Balanced overview
-- 10000+: Large segments, fewer plots
+**Available Models (7):** KNN, SVM, Decision Tree, Random Forest, Gradient Boosting, Logistic Regression, XGBoost
+
+### 4. FFT Frequency Analysis (`--fft`)
+
+Frequency-domain analysis with cosine-similarity comparison.
+
+```bash
+python src/main.py --fft                             # All durations
+python src/main.py --fft -d 30 --fft-max-pairs 1000  # 30s, more pairs
+```
+
+**Key Options:** `--fft-max-pairs` (default `500`), `--fft-freq-max` (default `40.0` Hz)
+
+### 5. Prediction Mode (`--predict`)
+
+Loads saved models and predicts stress on new data.
+
+```bash
+python src/main.py --predict --pavia                 # Pavia HRV data (default folder)
+python src/main.py --predict --test-data t.csv       # Custom CSV
+python src/main.py --predict                          # WESAD subject 0
+```
+
+**Key Options:** `--model-dir`, `--pavia`, `--test-data`, `--test-labels`
 
 ---
 
-### 3. **Machine Learning Training** (`-m` / `--ml`)
-Train ML models with cross-validation on ECG chunks.
+## 🧠 Label Schemes (`src/label_config.py`)
 
-```bash
-# All models, all durations
-python src/main.py -m
-
-# Specific durations
-python src/main.py -m -d 30 120
-
-# Specific models
-python src/main.py -m -mo knn svm xgboost
-
-# Both specific
-python src/main.py -m -d 30 -mo random_forest gradient_boosting
-
-# Adjust cross-validation folds
-python src/main.py -m -cv 10
-
-# Complete customization
-python src/main.py -m -d 30 -mo knn svm -cv 10 -o ./results
-
-# Custom dataset path
-python src/main.py -i /path/to/WESAD -m
-```
-
-**Key Options:**
-- `-i / --input`: Path to the WESAD dataset directory (default: `data/WESAD`)
-- `-d / --dataset`: Dataset durations (30, 120, 300 seconds) (default: all)
-- `-mo / --models`: Specify models to train (default: all)
-- `-cv / --cross-val`: Number of CV folds (default: 5)
-- `-o / --output`: Custom output directory
-
-**Available Models:**
-- `knn` - K-Nearest Neighbors
-- `svm` - Support Vector Machine
-- `decision_tree` - Decision Tree Classifier
-- `random_forest` - Random Forest
-- `gradient_boosting` - Gradient Boosting
-- `logistic_regression` - Logistic Regression
-- `xgboost` - XGBoost Classifier
+| Mode | Mapping | Classes |
+|------|---------|---------|
+| **binary** (default) | 1→0, 2→1, 3→0, 4→0 | {No Stress, Stress} |
+| **3class** | 1→0, 2→1, 3→0, 4→2 | {No Stress/Amusement, Stress, Meditation} |
 
 ---
 
-## 📁 File Structure
+## ✨ Extra Functionality Added
 
-```
-ECG-to-stress/
-├── src/
-│   ├── main.py                    CLI interface
-│   ├── data.py                    (existing classes used)
-│   ├── features.py
-│   ├── visualization.py
-│   └── correlation.py
-├── README.md                      Main repository readme
-├── CLI_README.md                  Comprehensive guide
-├── CLI_QUICK_REFERENCE.md         Quick lookup
-└── notebooks/
-    └── 05_ml_models.ipynb         (existing)
-```
+- **Cross-duration reliability analysis** — pair short windows with longer windows and compute Pearson `r`, ICC(2,1) and MAE; outputs pairwise comparison tables, heatmaps, per-feature and per-comparison bar charts, and styled metric summary tables.
+- **FFT frequency analysis** — mean spectra per class, duration overlays, and cosine-similarity distributions (cross-class vs within-class).
+- **Prediction mode** — load saved `.pkl` models and predict on Pavia HRV data, custom CSVs, or a WESAD subject.
+- **Saved models** — every trained model is serialized with a `.meta.pkl` metadata file (features, label mapping, duration).
+- **Series of figure scripts** (`src/figures/`):
+  - `bar_plot_accuracy_f1.py` — grouped bar chart of Accuracy / F1 / AUC across models (binary & 3-class).
+  - `ml_summary_table.py` — styled summary table of the best model per duration.
 
 ---
 
-## 💡 Example Usage Patterns
+## 📝 Design Features
 
-### Pattern 1: Quick Overview
-```bash
-python src/main.py -c
-python src/main.py -f -p 5000
-python src/main.py -m -d 30
-```
-
-### Pattern 2: Detailed Analysis
-```bash
-# Analyze correlations for specific features
-python src/main.py -c -f mean_rr mean_hr sdnn rmssd pnn50 -d 30 120 300
-
-# Visualize signals with high detail
-python src/main.py -f -p 2500 -s 0 1 2 3 4
-
-# Train best models with 10-fold CV
-python src/main.py -m -cv 10 -mo random_forest gradient_boosting xgboost
-```
-
-### Pattern 3: Specific Investigation
-```bash
-# Test 30s dataset with specific models
-python src/main.py -m -d 30 -mo knn svm random_forest
-
-# Visualize particular subjects
-python src/main.py -f -s 2 5 8 -p 7500
-
-# Correlate specific features
-python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
-```
-
----
-
-## 🔧 Features
-
-✅ **Comprehensive Help System**
-- `python src/main.py --help` - Main help
-- `python src/main.py -c --help` - Correlation help
-- `python src/main.py -f --help` - Visualization help
-- `python src/main.py -m --help` - ML training help
-
-✅ **Flexible Argument Parsing**
-- Short flags (`-c`, `-f`, `-m`, `-i`)
-- Long flags (`--corr`, `--full`, `--ml`, `--input`)
-- Subcommand aliases for flexibility
-
-✅ **Smart Defaults**
-- Dataset path: `data/WESAD`
-- Correlation: All features, all durations (30, 120, 300s)
-- Visualization: 5000 points per chunk, all subjects
-- ML: All 7 models, all durations, 5-fold CV
-
-✅ **Custom Configuration**
-- Specify dataset input path
-- Specify exact features, durations, models
-- Adjust visualization parameters
-- Configure output directories
-- Customize cross-validation folds
-
-✅ **Informative Output**
-- Progress messages with emojis
-- Clear file paths for outputs
-- Sample count and data statistics
-- Result summaries
+✅ **Argparse**: professional, standard Python CLI library
+✅ **Mutually exclusive commands**: `-c`, `-f`, `-m`, `--fft`, `--predict`
+✅ **Sensible defaults**: works out of the box with `data/WESAD`
+✅ **Label schemes**: binary & 3-class via a single `-l / --labels` flag
+✅ **Informative messages**: progress with clear file paths for outputs
+✅ **Flexible paths**: relative and absolute input/output support
+✅ **Adjustable model dir**: prediction can point to any saved-model folder
+✅ **Cross-validation**: stratified k-fold (configurable folds)
 
 ---
 
 ## 📊 Output Examples
 
-### Correlation Analysis Output
+### Correlation / Reliability Output
+
 ```
 📂 Loading dataset from: data/WESAD
 ✓ Loaded 15 subjects
 
-30s Dataset:
-✓ Created 196 chunks with 8 HRV features
-📈 Generating correlation visualizations for 3 features...
-✓ Saved: results/correlation_figures/features_30s.csv
-
+🔗 Comparing 30s vs 120s (ratio 4:1)...
+   • mean_rr     R=0.902  ICC=0.899  MAE=37.219  n=...
+✓ Saved comparison CSV: results/correlation_figures/cross_duration_comparison.csv
 ✅ Correlation analysis complete!
 ```
 
-### Full Signal Visualization Output
-```
-📂 Loading dataset from: data/WESAD
-✓ Loaded 15 subjects
-📊 Chunk size: 10000 points per plot
-
-📌 Processing Subject 0...
-✓ Saved: results/signal_plots/subject_00_ecg.png
-
-✅ ECG signal visualization complete!
-```
-
 ### ML Training Output
+
 ```
-🤖 Models to train: knn, svm, xgboost
+🤖 Models to train: knn, svm, random_forest
 📊 Cross-validation folds: 5
-
-⏱️  Processing 30s chunks...
-✓ Created 196 chunks
-✓ Extracted 196 samples × 8 features
 🚀 Training 3 models...
-   → KNN... ✓
-   → SVM... ✓
-   → XGBOOST... ✓
-✓ 30s dataset processing complete
-
+    → KNN ... ✓
+    → SVM ... ✓
+    → RANDOM FOREST ... ✓
+✓ Saved results CSV: results/ml_results/ml_results_30s_binary.csv
+✓ Saved models: results/ml_results/saved_models/*.pkl
 ✅ ML model training complete!
+```
+
+### Prediction Output
+
+```
+📋 Label mode: binary
+🤖 Models to use: knn, svm
+   ✓ Loaded KNN from saved_models/knn_30s.pkl
+   ✓ Pavia data ready: 34 samples, 8 features
+✓ Saved predictions to: results/predictions/predictions_30s.csv
+✅ Prediction complete!
 ```
 
 ---
@@ -263,14 +169,13 @@ python src/main.py -c -f sdnn rmssd lf_power hf_power -d 120
 ## 📚 Documentation Files
 
 ### `README.md` (Main)
-Project overview and entry point. References all other documentation files.
+Project overview, publication info, quick start. References all other documentation files.
 
 ### `CLI_README.md`
 Comprehensive usage guide with:
-- Detailed command descriptions
+- Detailed command descriptions for all 5 commands
 - All available options
-- Feature explanations
-- Model descriptions
+- Feature / model / label-mode explanations
 - Examples for each command
 - Output structure
 - Troubleshooting guide
@@ -280,45 +185,24 @@ Quick lookup sheet with:
 - All commands at a glance
 - Common usage patterns
 - Available options summary
-- Parameter ranges
-- Quick copy-paste examples
 
----
+### `CLI_OVERVIEW.md`
+Welcome and getting-started walkthrough with common workflows.
 
-## 🚀 Next Steps (Optional)
-
-The CLI is designed to be extensible. You can enhance it further by:
-
-1. **Integrate with Jupyter**: Add command to export notebook results to CLI
-2. **Add Batch Processing**: Support running multiple analysis pipelines
-3. **Add Result Comparison**: Compare results across different parameter combinations
-4. **Add Performance Metrics**: Display real-time training metrics
-5. **Add Configuration Files**: Support loading arguments from config files
-
----
-
-## 📝 Key Design Decisions
-
-✅ **Argparse**: Professional, standard Python CLI library
-✅ **Subcommands**: Clear separation of concerns
-✅ **Aliases**: Multiple ways to invoke same command
-✅ **Sensible Defaults**: Works without arguments
-✅ **Informative Messages**: User knows what's happening
-✅ **Flexible Paths**: Relative and absolute path support
-✅ **Adjustable Input Path**: Dataset location configurable via `-i`/`--input`
-✅ **Error Handling**: Validation of inputs with helpful messages
+### `CLI_COMMAND_STRUCTURE.md`
+Visual diagrams of command hierarchy, data flow, and a decision tree.
 
 ---
 
 ## ✨ Summary
 
 You now have a production-ready CLI that provides:
-- 3 main commands (correlation, visualization, ML)
-- Adjustable dataset input path via `-i`/`--input`
-- 7 different ML models
-- 3 dataset durations
-- 8 HRV features
-- Fully customizable parameters
-- Comprehensive documentation
 
-Users can now perform complex analysis with simple, intuitive commands!
+- **5 main commands** (correlation/reliability, visualization, ML, FFT, prediction)
+- **2 label schemes** (binary, 3-class)
+- **8 HRV features** across **3 recording durations** (30/120/300 s)
+- **7 ML models** with configurable k-fold cross-validation
+- **Saved models** for reuse in prediction
+- **Cross-duration reliability metrics** (Pearson r, ICC, MAE)
+
+Run complex analysis with simple, intuitive commands!
