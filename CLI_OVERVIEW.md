@@ -1,6 +1,6 @@
 # ECG-to-Stress CLI — Complete Overview
 
-> Supporting the paper **"Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification"** (AIMEH conference, WiMoB group).
+> Supporting the paper **"Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification"** (AIMEH conference).
 
 ## Welcome! 👋
 
@@ -14,7 +14,7 @@ The CLI (Command-Line Interface) provides an easy way to run all ECG analysis wo
 
 ```bash
 # Navigate to the project root
-cd g:\Master\Thesis\FLT\Code\ECG-to-stress
+cd g:Code\ECG-to-stress
 
 # Verify WESAD data is present
 ls data/WESAD/
