@@ -30,7 +30,7 @@ The goal is to explore how well standard HRV metrics — computed from chest-wor
 
 > **Investigating the Effect of ECG Recording Duration on HRV Reliability and Stress Classification**
 >
-> Presented at the **AIMEH** conference — **WiMoB** group.
+> Presented at the **AIMEH** conference.
 >
 > Authors: Ahmed H. Aly (University of Pisa), Vittorio Meini (CNR, Pisa), Lucia Billeci (CNR, Pisa)
 
@@ -349,7 +349,7 @@ An internal HRV dataset (`data/HRV_Pavia_per_soggetto.xlsx`) exported to `data/p
 
 ## 🤝 Contributing
 
-This is a research project for Master's thesis work (WiMoB group). Contributions and suggestions are welcome.
+This is a research project. Contributions and suggestions are welcome.
 
 ## 📄 License
 
