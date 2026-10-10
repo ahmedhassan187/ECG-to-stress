@@ -251,6 +251,16 @@ EXAMPLES:
         default=5,
         help='Number of cross-validation folds (default: 5)'
     )
+    ml_group.add_argument(
+        '--subsample-300',
+        action='store_true',
+        default=False,
+        dest='subsample_300',
+        help='Subsample the 30s and 120s chunk sets to the same number of '
+             'samples as the 300s chunks (used when 300s is among the '
+             'requested durations), so every duration trains on an '
+             'equal-sized dataset (default: off)'
+    )
 
     # ========== FFT OPTIONS ==========
     fft_group = parser.add_argument_group('FFT Analysis Options')
@@ -1235,6 +1245,42 @@ def _get_available_models(available_models):
 # MACHINE LEARNING TRAINING
 # ══════════════════════════════════════════════════════════════════════════
 
+def _count_chunks_for_duration(ecgs, labels, duration, label_cfg, fs=700):
+    """Count how many non-overlapping chunks a given duration would produce.
+
+    This must mirror the chunk-building logic used in run_ml_training:
+    valid samples are filtered via ``label_cfg.VALID_LABELS`` and then split
+    into contiguous, non-overlapping chunks of ``duration * fs`` samples.
+
+    Returns:
+        int: total number of chunks across all subjects.
+    """
+    chunk_size = duration * fs
+    total = 0
+    for ecg, label in zip(ecgs, labels):
+        valid_ecg = ecg[np.isin(label, label_cfg.VALID_LABELS)]
+        total += max(0, (len(valid_ecg) - chunk_size) // chunk_size + 1)
+    return total
+
+
+def _subsample_chunks(chunks, labels, subject_ids, target_count, rng):
+    """Randomly (without replacement) reduce a chunk collection to target_count.
+
+    Keeps the chunks, their labels and their subject ids aligned.
+
+    Returns:
+        (subsample of chunks, labels, subject_ids) if reduced, otherwise the
+        original lists unchanged.
+    """
+    n = len(chunks)
+    if n <= target_count:
+        return chunks, labels, subject_ids
+    idx = rng.choice(n, size=target_count, replace=False)
+    return ([chunks[i] for i in idx],
+            [labels[i] for i in idx],
+            [subject_ids[i] for i in idx])
+
+
 def run_ml_training(args):
     """
     Execute ML model training with cross-validation.
@@ -1255,6 +1301,8 @@ def run_ml_training(args):
     data_loader = Data(fs=700)
     feature_extractor = Features(fs=700)
     ml_evaluator = ML(random_state=42)
+    # Fixed RNG so the subsampling (when enabled) is reproducible.
+    subsample_rng = np.random.default_rng(42)
     
     dataset_path = _get_dataset_path(args)
     print(f"📂 Loading dataset from: {dataset_path}")
@@ -1321,6 +1369,23 @@ def run_ml_training(args):
         else:
             current_label_cfg = label_cfg
 
+        # ── Optional subsampling: make 30s/120s match the 300s chunk count ──
+        # When --subsample-300 is passed and 300s is among the requested
+        # durations, the 30s and 120s chunk sets (which yield far more chunks
+        # than 300s) are reduced at the start of training so every duration
+        # trains on the same number of samples.
+        subsample_flag = bool(getattr(args, 'subsample_300', False))
+        ref_300 = None
+        if subsample_flag and 300 in args.dataset:
+            ref_300 = _count_chunks_for_duration(ecgs, labels, 300, current_label_cfg)
+            if ref_300 > 0:
+                print(f"   🎯 Subsample-to-300s enabled: 30s/120s chunk sets will be "
+                      f"reduced to {ref_300} samples (the 300s chunk count)")
+            else:
+                print("   ⚠️  --subsample-300 set but the 300s chunk count is 0; "
+                      "skipping subsampling for this label mode.")
+                ref_300 = None
+
         for duration in args.dataset:
             print(f"\n⏱️  Processing {duration}s chunks ({mode})...")
             
@@ -1345,7 +1410,18 @@ def run_ml_training(args):
                     all_subject_ids.append(subj_id)
             
             print(f"✓ Created {len(all_chunks)} chunks")
-            
+
+            # Subsample right after building the chunks (before feature
+            # extraction) so 30s/120s match the 300s chunk count.
+            if (subsample_flag and ref_300 is not None and duration != 300
+                    and len(all_chunks) > ref_300):
+                before = len(all_chunks)
+                all_chunks, all_labels, all_subject_ids = _subsample_chunks(
+                    all_chunks, all_labels, all_subject_ids, ref_300, subsample_rng
+                )
+                print(f"   🎲 Subsampled {duration}s chunks: {before} → "
+                      f"{len(all_chunks)} (matched to {ref_300} = 300s count)")
+
             feature_list = []
             for chunk in all_chunks:
                 try:
