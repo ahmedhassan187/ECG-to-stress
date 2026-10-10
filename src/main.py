@@ -1599,7 +1599,6 @@ def run_ml_training(args):
                     'all_results': all_results,
                     'label_mode': mode,
                     'n_samples': int(X.shape[0]),
-                    'class_dist': dist_str,
                 }
 
             print(f"✓ {duration}s dataset processing complete ({mode})")
@@ -1801,8 +1800,8 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
 
 def _plot_ml_summary_table(all_results_by_duration, output_path):
     """
-    Generate a combined summary table (Label Mode | Duration | Chunks | Class Dist |
-    Best Model | Accuracy | F1 | AUC) across all durations, saved as a styled PNG and CSV.
+    Generate a combined summary table (Label Mode | Duration | Chunks | Best Model |
+    Accuracy | F1 | AUC) across all durations, saved as a styled PNG and CSV.
     """
     if not all_results_by_duration:
         return
@@ -1833,13 +1832,11 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
             duration = key
 
         n_samples = data.get('n_samples', np.nan)
-        class_dist = data.get('class_dist', 'N/A')
 
         rows.append({
             'Label Mode': mode.title(),
             'Duration': f'{duration} s',
             'Chunks': n_samples,
-            'Class Dist': class_dist,
             'Best Model': best_model.replace('_', ' ').title(),
             'Accuracy': best_acc,
             'F1': best_f1,
@@ -1860,7 +1857,7 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
     n_rows = len(df)
     n_cols = len(df.columns)
     fig_h = max(3.5, 0.6 * n_rows + 1.5)
-    fig, ax = plt.subplots(figsize=(max(13, n_cols * 2.1), fig_h))
+    fig, ax = plt.subplots(figsize=(max(11, n_cols * 1.8), fig_h))
     ax.axis('off')
 
     col_labels = list(df.columns)
@@ -1870,7 +1867,6 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
             row['Label Mode'],
             row['Duration'],
             'N/A' if np.isnan(row['Chunks']) else f'{int(row["Chunks"]):,}',
-            row['Class Dist'],
             row['Best Model'],
             f'{row["Accuracy"]:.4f}',
             f'{row["F1"]:.4f}',
@@ -1883,7 +1879,7 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
         row_colors = []
         for c in range(n_cols):
             val = df.iloc[r, c]
-            if c >= 5:  # Metric columns (Accuracy, F1, AUC)
+            if c >= 4:  # Metric columns (Accuracy, F1, AUC)
                 if isinstance(val, (int, float)) and not np.isnan(val):
                     norm = np.clip((val - 0.3) / 0.7, 0, 1)
                     row_colors.append(cmap(norm))
