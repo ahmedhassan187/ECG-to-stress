@@ -1245,40 +1245,64 @@ def _get_available_models(available_models):
 # MACHINE LEARNING TRAINING
 # ══════════════════════════════════════════════════════════════════════════
 
-def _count_chunks_for_duration(ecgs, labels, duration, label_cfg, fs=700):
-    """Count how many non-overlapping chunks a given duration would produce.
+def _count_chunks_by_class(ecgs, labels, duration, label_cfg, fs=700):
+    """Count how many chunks of each target class a duration would produce.
 
     This must mirror the chunk-building logic used in run_ml_training:
-    valid samples are filtered via ``label_cfg.VALID_LABELS`` and then split
-    into contiguous, non-overlapping chunks of ``duration * fs`` samples.
+    valid samples are filtered via ``label_cfg.VALID_LABELS`` and split into
+    contiguous, non-overlapping chunks of ``duration * fs`` samples; each chunk
+    takes the raw label of its first sample, mapped with
+    ``label_cfg.map_label``.
 
     Returns:
-        int: total number of chunks across all subjects.
+        dict: {target_label: number_of_chunks}
     """
     chunk_size = duration * fs
-    total = 0
+    counts = {}
     for ecg, label in zip(ecgs, labels):
-        valid_ecg = ecg[np.isin(label, label_cfg.VALID_LABELS)]
-        total += max(0, (len(valid_ecg) - chunk_size) // chunk_size + 1)
-    return total
+        valid_mask = np.isin(label, label_cfg.VALID_LABELS)
+        valid_ecg = ecg[valid_mask]
+        valid_label = label[valid_mask]
+        for i in range(0, len(valid_ecg) - chunk_size + 1, chunk_size):
+            target_label = int(label_cfg.map_label(int(valid_label[i])))
+            counts[target_label] = counts.get(target_label, 0) + 1
+    return counts
 
 
-def _subsample_chunks(chunks, labels, subject_ids, target_count, rng):
-    """Randomly (without replacement) reduce a chunk collection to target_count.
+def _subsample_chunks_by_class(chunks, labels, subject_ids, target_counts_by_class, rng):
+    """Stratified subsampling: reduce each class to the reference class counts.
 
-    Keeps the chunks, their labels and their subject ids aligned.
+    For every class the number of kept chunks equals
+    ``target_counts_by_class[class]`` (or all available ones if fewer exist).
+    Classes that are missing from the reference are dropped. This keeps the
+    stress:non-stress ratio of the subsampled set exactly equal to the
+    reference set (the 300s chunks). Chunks, labels and subject ids stay
+    aligned.
 
     Returns:
-        (subsample of chunks, labels, subject_ids) if reduced, otherwise the
-        original lists unchanged.
+        (subsampled chunks, labels, subject_ids)
     """
-    n = len(chunks)
-    if n <= target_count:
-        return chunks, labels, subject_ids
-    idx = rng.choice(n, size=target_count, replace=False)
-    return ([chunks[i] for i in idx],
-            [labels[i] for i in idx],
-            [subject_ids[i] for i in idx])
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for i, lab in enumerate(labels):
+        groups[lab].append(i)
+
+    keep_idx = []
+    for lab, idx_list in groups.items():
+        target = int(target_counts_by_class.get(lab, 0))
+        if target <= 0:
+            continue
+        if len(idx_list) <= target:
+            keep_idx.extend(idx_list)
+        else:
+            idx_arr = np.array(idx_list)
+            keep_idx.extend(idx_arr[rng.choice(idx_arr.size, size=target, replace=False)].tolist())
+
+    keep_idx.sort()
+    return ([chunks[i] for i in keep_idx],
+            [labels[i] for i in keep_idx],
+            [subject_ids[i] for i in keep_idx])
 
 
 def run_ml_training(args):
@@ -1373,18 +1397,26 @@ def run_ml_training(args):
         # When --subsample-300 is passed and 300s is among the requested
         # durations, the 30s and 120s chunk sets (which yield far more chunks
         # than 300s) are reduced at the start of training so every duration
-        # trains on the same number of samples.
+        # trains on the same number of samples. The reduction is done per
+        # class (stratified) so the stress:non-stress ratio of the 30s/120s
+        # sets matches the 300s set exactly.
         subsample_flag = bool(getattr(args, 'subsample_300', False))
-        ref_300 = None
+        ref_300_counts = None
         if subsample_flag and 300 in args.dataset:
-            ref_300 = _count_chunks_for_duration(ecgs, labels, 300, current_label_cfg)
-            if ref_300 > 0:
-                print(f"   🎯 Subsample-to-300s enabled: 30s/120s chunk sets will be "
-                      f"reduced to {ref_300} samples (the 300s chunk count)")
+            ref_300_counts = _count_chunks_by_class(ecgs, labels, 300, current_label_cfg)
+            ref_300_total = sum(ref_300_counts.values())
+            if ref_300_total > 0:
+                dist_str = ', '.join(
+                    f"{current_label_cfg.target_name(int(k))}: {v}"
+                    for k, v in sorted(ref_300_counts.items())
+                )
+                print(f"   🎯 Subsample-to-300s enabled: 30s/120s will be reduced "
+                      f"per class to match the 300s chunk counts → "
+                      f"300s class distribution: {dist_str}")
             else:
-                print("   ⚠️  --subsample-300 set but the 300s chunk count is 0; "
+                print("   ⚠️  --subsample-300 set but 300s produced 0 chunks; "
                       "skipping subsampling for this label mode.")
-                ref_300 = None
+                ref_300_counts = None
 
         for duration in args.dataset:
             print(f"\n⏱️  Processing {duration}s chunks ({mode})...")
@@ -1412,15 +1444,25 @@ def run_ml_training(args):
             print(f"✓ Created {len(all_chunks)} chunks")
 
             # Subsample right after building the chunks (before feature
-            # extraction) so 30s/120s match the 300s chunk count.
-            if (subsample_flag and ref_300 is not None and duration != 300
-                    and len(all_chunks) > ref_300):
+            # extraction) so 30s/120s match the 300s chunk count per class
+            # (stratified → identical stress:non-stress ratio as 300s).
+            ref_total = sum(ref_300_counts.values()) if ref_300_counts else 0
+            if (subsample_flag and ref_300_counts is not None and duration != 300
+                    and len(all_chunks) > ref_total):
                 before = len(all_chunks)
-                all_chunks, all_labels, all_subject_ids = _subsample_chunks(
-                    all_chunks, all_labels, all_subject_ids, ref_300, subsample_rng
+                all_chunks, all_labels, all_subject_ids = _subsample_chunks_by_class(
+                    all_chunks, all_labels, all_subject_ids, ref_300_counts, subsample_rng
                 )
-                print(f"   🎲 Subsampled {duration}s chunks: {before} → "
-                      f"{len(all_chunks)} (matched to {ref_300} = 300s count)")
+                from collections import Counter
+                dist = Counter(all_labels)
+                dist_str = ', '.join(
+                    f"{current_label_cfg.target_name(int(k))}: {v}"
+                    for k, v in sorted(dist.items())
+                )
+                print(f"   🎲 Subsampled {duration}s chunks (per class): "
+                      f"{before} → {len(all_chunks)} "
+                      f"(matched to 300s counts {dict(ref_300_counts)}); "
+                      f"new class distribution: {dist_str}")
 
             feature_list = []
             for chunk in all_chunks:
