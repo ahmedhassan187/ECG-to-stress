@@ -261,6 +261,17 @@ EXAMPLES:
              'requested durations), so every duration trains on an '
              'equal-sized dataset (default: off)'
     )
+    ml_group.add_argument(
+        '--best-metric',
+        type=str,
+        default='f1',
+        choices=['f1', 'accuracy', 'auc'],
+        dest='best_metric',
+        help='Metric used to pick the "Best Model" shown in the summary table '
+             'and the best-accuracy comparison plot. One of: f1, accuracy, auc '
+             '(default: f1). Use --best-metric accuracy to rank models by '
+             'accuracy instead of F1.'
+    )
 
     # ========== FFT OPTIONS ==========
     fft_group = parser.add_argument_group('FFT Analysis Options')
@@ -1605,10 +1616,16 @@ def run_ml_training(args):
 
     # After all durations processed, generate the combined summary table
     # (Label Mode | Duration | Best Model | Accuracy | F1 | AUC)
-    _plot_ml_summary_table(all_results_by_duration, output_path)
+    _plot_ml_summary_table(
+        all_results_by_duration, output_path,
+        best_metric=getattr(args, 'best_metric', 'f1')
+    )
 
     # Generate combined bar plots if both binary and 3class results exist
-    _plot_combined_bar_plot(all_results_by_duration, output_path)
+    _plot_combined_bar_plot(
+        all_results_by_duration, output_path,
+        best_metric=getattr(args, 'best_metric', 'f1')
+    )
 
     print("\n✅ ML model training complete!")
 
@@ -1798,13 +1815,24 @@ def _plot_confusion_matrices_grid(all_results, duration, output_path, label_cfg=
     print(f"✓ Saved individual CMs        : ml_cm_<model>_{duration}s{suffix}.png")
 
 
-def _plot_ml_summary_table(all_results_by_duration, output_path):
+def _plot_ml_summary_table(all_results_by_duration, output_path, best_metric='f1'):
     """
     Generate a combined summary table (Label Mode | Duration | Chunks | Best Model |
     Accuracy | F1 | AUC) across all durations, saved as a styled PNG and CSV.
+
+    The "Best Model" per (label mode, duration) is the one with the highest value
+    of ``best_metric`` (one of 'f1', 'accuracy', 'auc'; default 'f1'). The table
+    always reports Accuracy, F1 and AUC of that selected model, so when the best
+    model is chosen by F1 a different model may have a higher accuracy.
     """
     if not all_results_by_duration:
         return
+
+    metric_col = {
+        'f1': 'f1_mean',
+        'accuracy': 'accuracy_mean',
+        'auc': 'auc_mean',
+    }.get(best_metric, 'f1_mean')
 
     rows = []
     for key in sorted(all_results_by_duration.keys()):
@@ -1812,11 +1840,11 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
         summary_df = data['summary_df']
         label_mode = data.get('label_mode', 'binary')
 
-        # Find best model by F1
-        if 'f1_mean' not in summary_df.columns:
+        # Find best model by the requested metric
+        if metric_col not in summary_df.columns:
             continue
-        best_model = summary_df['f1_mean'].idxmax()
-        best_f1 = summary_df.loc[best_model, 'f1_mean']
+        best_model = summary_df[metric_col].idxmax()
+        best_f1 = summary_df.loc[best_model, 'f1_mean'] if 'f1_mean' in summary_df.columns else np.nan
         best_acc = summary_df.loc[best_model, 'accuracy_mean'] if 'accuracy_mean' in summary_df.columns else np.nan
 
         # Get AUC for best model
@@ -1918,7 +1946,7 @@ def _plot_ml_summary_table(all_results_by_duration, output_path):
     plt.close(fig)
     print(f"✓ Saved summary table PNG: {png_path}")
 
-def _plot_combined_bar_plot(all_results_by_duration, output_path):
+def _plot_combined_bar_plot(all_results_by_duration, output_path, best_metric='f1'):
     """
     Generate a side-by-side bar plot comparing binary vs 3-class performance
     for each duration. For each duration, shows Accuracy and F1 bars for both
@@ -2004,13 +2032,18 @@ def _plot_combined_bar_plot(all_results_by_duration, output_path):
     # Also save a combined bar plot for all durations in one figure
     durations = sorted(by_duration.keys())
     if len(durations) >= 1:
-        # For each duration, pick the best model (by F1) and compare binary vs 3class
+        # For each duration, pick the best model (by best_metric) and compare binary vs 3class
+        metric_col = {
+            'f1': 'f1_mean',
+            'accuracy': 'accuracy_mean',
+            'auc': 'auc_mean',
+        }.get(best_metric, 'f1_mean')
         rows = []
         for duration in durations:
             mode_dfs = by_duration[duration]
             if 'binary' in mode_dfs and '3class' in mode_dfs:
-                best_binary = mode_dfs['binary']['f1_mean'].idxmax()
-                best_3class = mode_dfs['3class']['f1_mean'].idxmax()
+                best_binary = mode_dfs['binary'][metric_col].idxmax()
+                best_3class = mode_dfs['3class'][metric_col].idxmax()
                 rows.append({
                     'Duration': f'{duration}s',
                     'Binary Best Model': best_binary.replace('_', ' ').title(),

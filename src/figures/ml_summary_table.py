@@ -191,11 +191,13 @@ def compute_auc_from_saved_models(durations, feature_names=None):
     return auc_results
 
 
-def build_summary_table(data):
+def build_summary_table(data, metric="f1_mean"):
     """
     Build the summary table (Duration | Best Model | Accuracy | F1 | AUC).
-    
-    Best model is chosen by F1 score.
+
+    Best model is chosen by the given metric column (default: f1_mean).
+    The table always reports Accuracy, F1 and AUC of that selected model, so
+    when models are ranked by F1 a different model may show a higher accuracy.
     """
     durations = sorted(data.keys())
     rows = []
@@ -207,11 +209,14 @@ def build_summary_table(data):
 
     for duration in durations:
         df = data[duration]
-        best_model, best_f1 = find_best_model(df, "f1_mean")
+        best_model, _ = find_best_model(df, metric)
         if best_model is None:
             continue
 
-        best_acc = df.loc[best_model, "accuracy_mean"] if best_model in df.index else np.nan
+        # Always report Accuracy / F1 / AUC of the selected model,
+        # regardless of which metric was used to select it.
+        best_acc = df.loc[best_model, "accuracy_mean"] if "accuracy_mean" in df.columns else np.nan
+        best_f1 = df.loc[best_model, "f1_mean"] if "f1_mean" in df.columns else np.nan
 
         # Get AUC for best model at this duration
         best_auc = np.nan
@@ -309,6 +314,18 @@ def plot_table(df, output_path):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ML summary table generator")
+    parser.add_argument(
+        "--metric",
+        choices=["f1_mean", "accuracy_mean", "auc_mean"],
+        default="f1_mean",
+        help='Metric used to select the "Best Model" per duration '
+             "(default: f1_mean). Use accuracy_mean to rank models by accuracy.",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("ML SUMMARY TABLE GENERATOR")
     print("=" * 60)
@@ -324,7 +341,7 @@ def main():
     for d in durations:
         print(f"   {d}s: {list(data[d].index)}")
 
-    summary_df = build_summary_table(data)
+    summary_df = build_summary_table(data, metric=args.metric)
     print("\n📋 Summary table:")
     print(summary_df.to_string(index=False))
 
