@@ -1521,10 +1521,17 @@ def run_ml_training(args):
 
             all_results = {}
             for model_name in models_to_train:
-                model = _get_model(model_name)
-                if model is None:
+                base_model = _get_model(model_name)
+                if base_model is None:
                     print(f"   \u2192 {model_name.upper()}... ⚠️ skipped (not available)")
                     continue
+
+                from sklearn.pipeline import Pipeline
+                from sklearn.preprocessing import StandardScaler
+                model = Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('classifier', base_model),
+                ])
 
                 try:
                     models_dict = {model_name: model}
@@ -1535,6 +1542,10 @@ def run_ml_training(args):
                     )
                     all_results[model_name] = results[model_name]
                     overall = results[model_name]['overall']
+
+                    from sklearn.preprocessing import StandardScaler
+                    feature_scaler = StandardScaler()
+                    feature_scaler.fit(X)
 
                     try:
                         from sklearn.base import clone as _clone
@@ -1549,6 +1560,33 @@ def run_ml_training(args):
                     model_path = model_dir / f"{model_name}_{duration}s_{mode}.pkl"
                     joblib.dump(final_model, model_path)
 
+                    # Save the scaler (normalization/standardization values)
+                    # under several conventional names so it can be re-applied
+                    # to new data when using the trained models.
+                    scaler_names = [
+                        f"scaler_{duration}s_{mode}.pkl",
+                        f"standard_scaler_{duration}s_{mode}.pkl",
+                        f"normalization_{duration}s_{mode}.pkl",
+                        f"standardization_{duration}s_{mode}.pkl",
+                        f"{model_name}_{duration}s_{mode}_scaler.pkl",
+                        f"{model_name}_{duration}s_{mode}.scaler.pkl",
+                    ]
+                    for sname in scaler_names:
+                        joblib.dump(feature_scaler, model_dir / sname)
+
+                    import json
+                    scaler_values = {
+                        'feature_names': feature_names,
+                        'mean': feature_scaler.mean_.tolist(),
+                        'scale': feature_scaler.scale_.tolist(),
+                        'var': feature_scaler.var_.tolist(),
+                        'n_samples_seen': int(feature_scaler.n_samples_seen_),
+                    }
+                    with open(model_dir / f"scaler_{duration}s_{mode}.json", 'w') as _f:
+                        json.dump(scaler_values, _f, indent=2)
+                    with open(model_dir / f"normalization_{duration}s_{mode}.json", 'w') as _f:
+                        json.dump(scaler_values, _f, indent=2)
+
                     # Build human-readable label mapping for metadata
                     meta_label_mapping = {k: current_label_cfg.target_name(int(k))
                                           for k in sorted(set(y))}
@@ -1561,6 +1599,13 @@ def run_ml_training(args):
                         'label_source': current_label_cfg.label_source,
                         'label_mode': mode,
                         'trained_on': 'wesad',
+                        'scaler': feature_scaler,
+                        'scaler_mean': feature_scaler.mean_.tolist(),
+                        'scaler_scale': feature_scaler.scale_.tolist(),
+                        'normalization_mean': feature_scaler.mean_.tolist(),
+                        'normalization_std': feature_scaler.scale_.tolist(),
+                        'standardization_mean': feature_scaler.mean_.tolist(),
+                        'standardization_std': feature_scaler.scale_.tolist(),
                     }, meta_path)
 
                     f1_info = ""
@@ -2555,16 +2600,27 @@ def run_prediction(args):
         models = {}
         model_dir = Path(args.model_dir)
         
+        mode = getattr(args, 'labels', 'binary')
+        
         for model_name in models_to_use:
-            model_path = model_dir / f"{model_name}_{duration}s.pkl"
-            if model_path.exists():
-                try:
-                    models[model_name] = joblib.load(model_path)
-                    print(f"   ✓ Loaded {model_name.upper()} from {model_path}")
-                except Exception as e:
-                    print(f"   ❌ Failed to load {model_name.upper()}: {e}")
-            else:
-                print(f"   ⚠️  Model not found: {model_path}")
+            candidate_names = [
+                f"{model_name}_{duration}s_{mode}.pkl",
+                f"{model_name}_{duration}s.pkl",
+            ]
+            loaded = False
+            for cname in candidate_names:
+                model_path = model_dir / cname
+                if model_path.exists():
+                    try:
+                        models[model_name] = joblib.load(model_path)
+                        print(f"   ✓ Loaded {model_name.upper()} from {model_path}")
+                        loaded = True
+                        break
+                    except Exception as e:
+                        print(f"   ❌ Failed to load {model_name.upper()}: {e}")
+            if not loaded:
+                # last tried path for message
+                print(f"   ⚠️  Model not found: {model_dir / candidate_names[0]}")
         
         if not models:
             print(f"   ❌ No models found for {duration}s duration. Skipping...")
@@ -2656,8 +2712,7 @@ def run_prediction(args):
                 y_test = np.array(y_test)
                 
                 nan_mask = ~np.isnan(X_test).any(axis=1)
-                X_test = X_test[nan_mask]
-                y_test = y_test[nan_mask]
+
                 
                 for col_idx in range(X_test.shape[1]):
                     col_median = np.nanmedian(X_test[:, col_idx])
@@ -2676,13 +2731,49 @@ def run_prediction(args):
             print(f"   ⚠️  No test data available for {duration}s")
             continue
         
+        # Load the saved scaler (normalization/standardization values) if present
+        loaded_scaler = None
+        scaler_candidate_names = [
+            f"scaler_{duration}s_{mode}.pkl",
+            f"standard_scaler_{duration}s_{mode}.pkl",
+            f"normalization_{duration}s_{mode}.pkl",
+            f"standardization_{duration}s_{mode}.pkl",
+        ]
+        for sname in scaler_candidate_names:
+            sp = model_dir / sname
+            if sp.exists():
+                try:
+                    loaded_scaler = joblib.load(sp)
+                    print(f"   ✓ Loaded scaler from {sp}")
+                    break
+                except Exception as e:
+                    print(f"   ⚠️  Could not load scaler {sp}: {e}")
+        if loaded_scaler is None:
+            for _mn in models:
+                meta_path = model_dir / f"{_mn}_{duration}s_{mode}.meta.pkl"
+                if meta_path.exists():
+                    try:
+                        _meta = joblib.load(meta_path)
+                        if isinstance(_meta, dict) and 'scaler' in _meta:
+                            loaded_scaler = _meta['scaler']
+                            print(f"   ✓ Loaded scaler from {_mn} metadata")
+                            break
+                    except Exception:
+                        pass
+
         predictions = {}
         y_pred_all = []
         y_true = test_labels if test_labels is not None else None
         
         for model_name, model in models.items():
             try:
-                y_pred = model.predict(X_test)
+                # Apply saved normalization/standardization values when the
+                # loaded model is not already a scaling pipeline.
+                is_pipeline = hasattr(model, 'named_steps')
+                X_input = X_test
+                if (not is_pipeline) and loaded_scaler is not None:
+                    X_input = loaded_scaler.transform(X_test)
+                y_pred = model.predict(X_input)
                 predictions[model_name] = y_pred
                 y_pred_all.append(y_pred)
                 

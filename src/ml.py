@@ -116,6 +116,7 @@ class ML:
         - results_dict: dict containing results for each model
         """
         avg = average if average is not None else self.average
+        from sklearn.base import clone
         results_dict = {}
 
         for model_name, model in models.items():
@@ -158,7 +159,7 @@ class ML:
                     X_train, X_test = X[train_idx], X[test_idx]
                     y_train, y_test = y[train_idx], y[test_idx]
 
-                    model_clone = model.__class__(**model.get_params())
+                    model_clone = clone(model)
                     model_clone.fit(X_train, y_train)
                     y_pred = model_clone.predict(X_test)
 
